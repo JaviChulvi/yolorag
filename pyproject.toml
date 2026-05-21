@@ -5,18 +5,18 @@ description = "Provider-agnostic RAG orchestrator prototype"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi",
   "genai-prices",
   "openai",
   "python-dotenv",
+  "uvicorn",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "httpx",
   "pytest",
 ]
-
-[project.scripts]
-yolorag = "yolorag.cli:main"
 
 [build-system]
 requires = ["hatchling"]

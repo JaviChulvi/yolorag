@@ -11,6 +11,8 @@ from yolorag.usage.extractors import OpenAIUsageExtractor
 
 class OpenAIProvider:
     provider_name = "openai"
+    reasoning_model_prefixes = ("gpt-5", "o1", "o3", "o4")
+    verbosity_model_prefixes = ("gpt-5",)
 
     def __init__(
         self,
@@ -60,12 +62,30 @@ class OpenAIProvider:
         kwargs = {
             "model": request.model,
             "messages": request.messages,
-            "temperature": request.temperature,
-            "reasoning_effort": "high" if request.mode == "deep" else "low",
-            "verbosity": "medium" if request.mode == "deep" else "low",
         }
-        if request.max_tokens is not None:
-            kwargs["max_tokens"] = request.max_tokens
+        if self._uses_reasoning_controls(request.model):
+            kwargs["reasoning_effort"] = "high" if request.mode == "deep" else "low"
+            if self._uses_verbosity_control(request.model):
+                kwargs["verbosity"] = "medium" if request.mode == "deep" else "low"
+            if request.max_tokens is not None:
+                kwargs["max_completion_tokens"] = request.max_tokens
+        else:
+            kwargs["temperature"] = request.temperature
+            if request.max_tokens is not None:
+                kwargs["max_tokens"] = request.max_tokens
         if request.tools:
             kwargs["tools"] = request.tools
         return kwargs
+
+    def _uses_reasoning_controls(self, model: str) -> bool:
+        return _normalized_model_name(model).startswith(self.reasoning_model_prefixes)
+
+    def _uses_verbosity_control(self, model: str) -> bool:
+        return _normalized_model_name(model).startswith(self.verbosity_model_prefixes)
+
+
+def _normalized_model_name(model: str) -> str:
+    lowered = model.lower()
+    if lowered.startswith("ft:"):
+        return lowered.split(":", 1)[1]
+    return lowered

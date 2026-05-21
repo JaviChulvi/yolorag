@@ -10,6 +10,21 @@ Make `src/yolorag` work as the backend for the sibling `../llm` chat widget by e
 
 The `llm` folder should be treated as the client/widget contract. The core LLM, RAG, routing, provider, usage, and cost logic should remain owned by `src/yolorag`.
 
+## Stakeholder Reference Notes
+
+The website chat widget is the latency-critical path. It should feel super-fast for the yellow-pill chat entry points in `ultralytics/llm`: <https://github.com/ultralytics/llm>.
+
+GitHub issue responses can use slower orchestration. Reference examples:
+
+- Minimal assistant response: <https://github.com/ultralytics/yolo-ios-app/issues/234#issuecomment-4279029465>.
+- More contextualized Paula-style response with a human face for engagement: <https://github.com/ultralytics/yolo-ios-app/issues/234#issuecomment-4283908126>.
+
+Timing expectations differ by surface: the assistant GitHub response can take around 60 seconds, while a Paula-style contextualized response may arrive several hours later. The fast `/api/chat` path should not inherit those slower latency budgets.
+
+Current RAG coverage scrapes docs and website content, but GitHub coverage is incomplete. GitHub Issues are not ingested today and may need a search tool or MCP-backed path. Source-code coverage is also uneven: `ultralytics/ultralytics` gets inline source-code reference pages in the docs, but other repositories such as `ultralytics/yolo-ios-app` do not have equivalent source-code coverage, which makes repo-specific answers weaker without GitHub source/search/MCP support.
+
+The expected deployment stack is Python, Google Cloud Run, FastAPI, MongoDB, and Voyage embeddings/rerankers. The LLM layer should remain vendor-agnostic, including the harder cases of search, MCP, and tool calling. Dedicated vector databases remain open for consideration if they provide a clear operational or retrieval-quality benefit.
+
 ## Current State
 
 `src/yolorag` already has useful backend primitives:
@@ -20,7 +35,7 @@ The `llm` folder should be treated as the client/widget contract. The core LLM, 
 - `retrieval/`: retriever protocol and in-memory retriever.
 - `review/`: simple answer review.
 - `usage/`: token usage extraction and cost calculation.
-- `cli.py`: local command-line wiring for provider/model/orchestrator setup.
+- `runtime.py`: API runtime wiring for provider/model/orchestrator setup.
 
 The `../llm` folder currently provides:
 
@@ -147,16 +162,16 @@ src/yolorag/retrieval/docs_index.py
 
 ## Runtime Wiring
 
-Create `src/yolorag/runtime.py` to centralize setup currently embedded in `cli.py`:
+Create `src/yolorag/runtime.py` to centralize API runtime setup:
 
 - Resolve provider: `openai` or `deepseek`.
 - Resolve mode: `fast` or `deep`.
-- Resolve model from explicit config, env vars, `models.json`, or defaults.
+- Resolve model from env vars or built-in defaults.
 - Build `RAGOrchestrator`.
 - Build retriever and reviewer.
 - Share one `InMemoryConversationStore` across requests.
 
-This prevents the CLI and FastAPI app from drifting into separate runtime behavior.
+This keeps the FastAPI app as the only runtime entrypoint for now.
 
 Suggested environment variables:
 
@@ -175,7 +190,6 @@ OPENAI_API_KEY=
 DEEPSEEK_API_KEY=
 OPENAI_BASE_URL=
 DEEPSEEK_BASE_URL=https://api.deepseek.com
-YOLORAG_MODELS_CONFIG=models.json
 YOLORAG_OPENAI_FAST_MODEL=
 YOLORAG_OPENAI_THINKING_MODEL=
 YOLORAG_DEEPSEEK_FAST_MODEL=
@@ -301,7 +315,7 @@ Add API tests with a fake provider so no real model call is made:
 
 1. Add FastAPI dependency and API package skeleton.
 2. Create request/response schemas matching `../llm/docs/API.md`.
-3. Extract shared runtime wiring from `cli.py` into `runtime.py`.
+3. Add API runtime wiring in `runtime.py`.
 4. Implement `/api/search` using existing retriever.
 5. Implement `/api/feedback` as a validated no-op.
 6. Implement `/api/chat` with SSE-compatible completed-answer chunking.

@@ -49,6 +49,20 @@ Slow responses:
   - Long-form troubleshooting.
 - Primary goal: higher reasoning quality and accuracy, even if latency is slightly higher.
 
+## Clarified Requirements From Email
+
+Additional reference examples and constraints from the follow-up email:
+
+- Minimal GitHub LLM response reference: <https://github.com/ultralytics/yolo-ios-app/issues/234#issuecomment-4279029465>.
+- More contextualized GitHub LLM/Paula response reference, including a human face for better engagement: <https://github.com/ultralytics/yolo-ios-app/issues/234#issuecomment-4283908126>.
+- Chat is the latency-critical surface and should reply super-fast. This maps to the yellow-pill chat entry points in the `ultralytics/llm` widget: <https://github.com/ultralytics/llm>.
+- GitHub issue assistant responses are not expected to be immediate. An assistant response can take around 60 seconds, and a Paula-style contextualized response can be expected several hours later.
+- The current RAG source coverage scrapes docs and website content, but has gaps on GitHub content. GitHub Issues are not covered today, though they may eventually be handled through a search tool or MCP integration.
+- Ultralytics docs include inline source-code reference pages for `ultralytics/ultralytics`, such as <https://docs.ultralytics.com/reference/nn/tasks#ultralytics.nn.tasks.torch_safe_load>. Other repositories, such as `ultralytics/yolo-ios-app`, do not currently have equivalent docs-hosted source-code coverage, so repo-specific responses can struggle without GitHub source/search/MCP coverage.
+- The expected production stack is Python, Google Cloud Run, FastAPI, MongoDB, and Voyage embeddings/rerankers.
+- The LLM layer should remain vendor-agnostic. This is straightforward for simple chat, but harder for search, MCP, and tool calling, so provider abstraction should explicitly account for those advanced paths.
+- Dedicated vector databases are acceptable if they provide a clear benefit over the current Mongo-backed approach.
+
 ## Performance And Architecture Objectives
 
 The system should improve performance across these dimensions:
