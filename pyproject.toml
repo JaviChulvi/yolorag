@@ -1,0 +1,23 @@
+[project]
+name = "yolorag"
+version = "0.1.0"
+description = "Provider-agnostic RAG orchestrator prototype"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "genai-prices",
+  "openai",
+  "python-dotenv",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
+[project.scripts]
+yolorag = "yolorag.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

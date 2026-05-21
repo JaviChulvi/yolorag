@@ -1,0 +1,18 @@
+{
+  "openai": {
+    "fast": {
+      "model": "gpt-5.4-mini"
+    },
+    "deep": {
+      "model": "gpt-5.5"
+    }
+  },
+  "deepseek": {
+    "fast": {
+      "model": "deepseek-v4-flash"
+    },
+    "deep": {
+      "model": "deepseek-v4-pro"
+    }
+  }
+}
