@@ -37,6 +37,27 @@ curl -N http://127.0.0.1:8000/api/chat \
 The endpoint returns Server-Sent Events and an `X-Session-ID` header. Send that
 same session ID on the next request to reuse the in-memory conversation history.
 
+## Run The Frontend
+
+The local frontend lives in `frontend/`. It uses Vite, React, Tailwind CSS, and the local `../llm/js/chat.js` widget.
+
+```bash
+cd frontend
+npm install
+npm run sync:llm
+npm run dev
+```
+
+By default, Vite proxies `/api/*` to `http://127.0.0.1:8000`, so the widget can call `/api/chat` while the FastAPI server uses the real configured provider.
+
+Use a real provider for local chat testing:
+
+```bash
+YOLORAG_API_PROVIDER=openai \
+OPENAI_API_KEY=... \
+PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000
+```
+
 ## Model Defaults
 
 The API picks models by provider and mode. Model names can only be configured through environment variables for now. If no env override is present, the built-in defaults are used.
