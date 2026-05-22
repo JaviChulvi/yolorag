@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from yolorag.api.schemas import ChatRequest
-from yolorag.api.sse import error_event_stream, text_event_stream
+from yolorag.api.sse import content_event_stream, error_event_stream
 from yolorag.runtime import YoloRAGRuntime, build_runtime
 
 
@@ -25,12 +25,14 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
 
     try:
         runtime = _runtime(request)
-        result = await runtime.answer(
-            user_message=_compose_user_message(payload, user_message.content),
-            conversation_id=session_id,
+        total_messages, active_messages = _pending_message_counts(runtime, session_id)
+        stream = content_event_stream(
+            runtime.stream_answer(
+                user_message=_compose_user_message(payload, user_message.content),
+                conversation_id=session_id,
+            ),
+            error_prefix="Chat generation failed",
         )
-        total_messages, active_messages = runtime.message_counts(session_id)
-        stream = text_event_stream(result.answer)
     except Exception as exc:
         stream = error_event_stream(f"Chat generation failed: {exc}")
 
@@ -52,6 +54,11 @@ def _runtime(request: Request) -> YoloRAGRuntime:
         runtime = build_runtime()
         request.app.state.runtime = runtime
     return runtime
+
+
+def _pending_message_counts(runtime: YoloRAGRuntime, session_id: str) -> tuple[int, int]:
+    total_messages, active_messages = runtime.message_counts(session_id)
+    return total_messages + 1, active_messages + 1
 
 
 def _compose_user_message(payload: ChatRequest, content: str) -> str:

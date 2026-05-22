@@ -215,7 +215,7 @@ Implementation flow:
 8. Stream the answer as SSE chunks.
 9. End with `data: [DONE]`.
 
-Important note: the current provider interface is non-streaming. The first FastAPI version can still be widget-compatible by calling the orchestrator once and then chunking the completed answer into SSE events. True token streaming can be added later by extending the provider protocol.
+Important note: the provider interface now supports true streaming. The FastAPI chat route should forward provider deltas as SSE events instead of waiting for the completed answer and rechunking it.
 
 ## Session And Edit Handling
 
@@ -318,7 +318,7 @@ Add API tests with a fake provider so no real model call is made:
 3. Add API runtime wiring in `runtime.py`.
 4. Implement `/api/search` using existing retriever.
 5. Implement `/api/feedback` as a validated no-op.
-6. Implement `/api/chat` with SSE-compatible completed-answer chunking.
+6. Implement `/api/chat` with provider-token SSE streaming.
 7. Add session ID headers and message-count headers.
 8. Add conversation truncation for `edit_index`.
 9. Add tests with fake provider/runtime.
@@ -326,7 +326,6 @@ Add API tests with a fake provider so no real model call is made:
 
 ## Future Enhancements
 
-- True token streaming from provider adapters.
 - Real Ultralytics docs index.
 - GitHub issue/search tool behind the widget's `github` tool button.
 - Persistent sessions instead of in-memory sessions.

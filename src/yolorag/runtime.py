@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 from yolorag.config.model_defaults import default_model_for
 from yolorag.config.settings import getenv
 from yolorag.core.orchestrator import OrchestratorResult, RAGOrchestrator
+from yolorag.knowledge.stores.mongodb import MongoKnowledgeStore, MongoKnowledgeStoreConfig
 from yolorag.providers.base import ResponseMode
 from yolorag.providers.deepseek_provider import DeepSeekProvider
 from yolorag.providers.openai_provider import OpenAIProvider
-from yolorag.retrieval.base import Document
-from yolorag.retrieval.in_memory import InMemoryRetriever
-from yolorag.review.simple_reviewer import SimpleReviewer
+from yolorag.retrieval.base import Retriever
+from yolorag.retrieval.mongodb import MongoReranker, MongoVectorRetriever
+
+
+DEFAULT_CHAT_VECTOR_TOP_K = 5
 
 
 @dataclass
@@ -20,6 +24,13 @@ class YoloRAGRuntime:
 
     async def answer(self, user_message: str, conversation_id: str) -> OrchestratorResult:
         return await self.orchestrator.answer(
+            user_message=user_message,
+            conversation_id=conversation_id,
+            mode=self.mode,
+        )
+
+    def stream_answer(self, user_message: str, conversation_id: str) -> AsyncIterator[str]:
+        return self.orchestrator.stream_answer(
             user_message=user_message,
             conversation_id=conversation_id,
             mode=self.mode,
@@ -43,13 +54,15 @@ def build_runtime(
         mode=selected_mode,
     )
     provider = _build_provider(provider_name=selected_provider, api_base=api_base)
+    retriever = _build_retriever()
 
     return YoloRAGRuntime(
         orchestrator=RAGOrchestrator(
             provider=provider,
             model=selected_model,
-            retriever=InMemoryRetriever(_sample_documents()),
-            reviewer=SimpleReviewer(),
+            retriever=retriever,
+            force_retrieval=retriever is not None,
+            retrieval_top_k=_env_int("YOLORAG_CHAT_VECTOR_TOP_K", default=DEFAULT_CHAT_VECTOR_TOP_K),
         ),
         mode=selected_mode,
     )
@@ -101,26 +114,36 @@ def _require_env(name: str) -> str:
     raise RuntimeError(f"Missing required environment variable {name}.")
 
 
-def _sample_documents() -> list[Document]:
-    return [
-        Document(
-            id="ultralytics-yolo-export",
-            title="Ultralytics YOLO Export",
-            content=(
-                "Ultralytics YOLO models can be exported to deployment formats. "
-                "Export and inference troubleshooting often benefits from focused "
-                "retrieval because exact framework versions and target formats matter."
-            ),
-            metadata={"url": "https://docs.ultralytics.com/modes/export/"},
-        ),
-        Document(
-            id="rag-selective-retrieval",
-            title="Selective Retrieval Guidance",
-            content=(
-                "Retrieval should be skipped for generic chat and used when external "
-                "knowledge materially improves answer quality. Repeated turns should "
-                "avoid reinjecting the same documents."
-            ),
-            metadata={"url": "https://docs.ultralytics.com/"},
-        ),
-    ]
+def _build_retriever() -> Retriever | None:
+    store = MongoKnowledgeStore(MongoKnowledgeStoreConfig.from_env())
+    return MongoVectorRetriever(
+        store=store,
+        reranker=MongoReranker.from_env(),
+        candidate_limit=_env_int_or_none("YOLORAG_RERANK_CANDIDATE_LIMIT"),
+    )
+
+
+def _env_int(name: str, default: int) -> int:
+    value = getenv(name)
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be greater than 0.")
+    return parsed
+
+
+def _env_int_or_none(name: str) -> int | None:
+    value = getenv(name)
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer.") from exc
+    if parsed <= 0:
+        raise ValueError(f"{name} must be greater than 0.")
+    return parsed

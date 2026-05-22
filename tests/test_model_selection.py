@@ -70,6 +70,19 @@ class ProviderRequestOptionTests(unittest.TestCase):
         self.assertEqual(kwargs["max_completion_tokens"], 512)
         self.assertNotIn("max_tokens", kwargs)
 
+    def test_openai_streaming_requests_usage_in_final_chunk(self) -> None:
+        provider = OpenAIProvider(api_key="test-key")
+        kwargs = provider._stream_completion_kwargs(
+            LLMRequest(
+                messages=[{"role": "user", "content": "hello"}],
+                model="gpt-5.4-mini",
+                mode="fast",
+            )
+        )
+
+        self.assertTrue(kwargs["stream"])
+        self.assertEqual(kwargs["stream_options"], {"include_usage": True})
+
     def test_openai_legacy_chat_models_keep_sampling_controls(self) -> None:
         provider = OpenAIProvider(api_key="test-key")
         kwargs = provider._completion_kwargs(
@@ -99,6 +112,20 @@ class ProviderRequestOptionTests(unittest.TestCase):
 
         self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertNotIn("reasoning_effort", kwargs)
+
+    def test_deepseek_streaming_keeps_openai_compat_kwargs_minimal(self) -> None:
+        provider = DeepSeekProvider(api_key="test-key")
+        kwargs = provider._stream_completion_kwargs(
+            LLMRequest(
+                messages=[{"role": "user", "content": "hello"}],
+                model="deepseek-v4-flash",
+                mode="fast",
+            )
+        )
+
+        self.assertTrue(kwargs["stream"])
+        self.assertNotIn("stream_options", kwargs)
+        self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
 
     def test_deepseek_deep_enables_high_effort_thinking(self) -> None:
         provider = DeepSeekProvider(api_key="test-key")

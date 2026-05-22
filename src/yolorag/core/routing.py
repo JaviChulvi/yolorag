@@ -9,9 +9,7 @@ from yolorag.providers.base import ResponseMode
 class OrchestrationPlan:
     mode: ResponseMode
     should_retrieve: bool
-    should_review: bool
     top_k: int
-    reasoning_budget: str
     reason: str
 
 
@@ -48,9 +46,7 @@ class SimpleRoutePlanner:
             return OrchestrationPlan(
                 mode="deep",
                 should_retrieve=looks_domain_specific,
-                should_review=True,
                 top_k=4,
-                reasoning_budget="high",
                 reason=(
                     "Deep mode requested; retrieval is enabled only because the "
                     "question appears domain-specific."
@@ -62,13 +58,10 @@ class SimpleRoutePlanner:
         return OrchestrationPlan(
             mode="fast",
             should_retrieve=looks_domain_specific and not looks_generic,
-            should_review=False,
             top_k=2,
-            reasoning_budget="low",
             reason=(
                 "Fast mode with targeted retrieval because the question appears domain-specific."
                 if looks_domain_specific and not looks_generic
                 else "Fast mode skipped retrieval to minimize latency and context noise."
             ),
         )
-

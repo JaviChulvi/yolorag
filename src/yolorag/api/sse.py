@@ -6,16 +6,30 @@ from collections.abc import AsyncIterator
 
 async def text_event_stream(text: str, chunk_size: int = 80) -> AsyncIterator[str]:
     for chunk in _chunks(text, chunk_size=chunk_size):
-        yield _data_event({"content": chunk})
+        yield data_event({"content": chunk})
+    yield "data: [DONE]\n\n"
+
+
+async def content_event_stream(
+    chunks: AsyncIterator[str],
+    error_prefix: str = "Stream failed",
+) -> AsyncIterator[str]:
+    try:
+        async for chunk in chunks:
+            yield data_event({"content": chunk})
+    except Exception as exc:
+        async for event in error_event_stream(f"{error_prefix}: {exc}"):
+            yield event
+        return
     yield "data: [DONE]\n\n"
 
 
 async def error_event_stream(message: str) -> AsyncIterator[str]:
-    yield _data_event({"error": message})
+    yield data_event({"error": message})
     yield "data: [DONE]\n\n"
 
 
-def _data_event(payload: dict[str, str]) -> str:
+def data_event(payload: dict[str, str]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 

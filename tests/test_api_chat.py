@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from asyncio import run
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
 
 from yolorag.api.app import create_app
 from yolorag.core.orchestrator import RAGOrchestrator
-from yolorag.providers.base import LLMRequest, LLMResponse
+from yolorag.providers.base import LLMRequest, LLMResponse, LLMStreamEvent
+from yolorag.retrieval.base import Document, RetrievalResult
 from yolorag.runtime import YoloRAGRuntime
 from yolorag.usage.models import CostBreakdown, TokenUsage
 
@@ -17,8 +19,11 @@ class RecordingProvider:
 
     def __init__(self) -> None:
         self.requests: list[LLMRequest] = []
+        self.complete_calls = 0
+        self.stream_calls = 0
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.complete_calls += 1
         self.requests.append(request)
         user_message = request.messages[-1]["content"]
         return LLMResponse(
@@ -30,6 +35,13 @@ class RecordingProvider:
             latency_ms=1,
             raw_response={"test": True},
         )
+
+    async def stream_complete(self, request: LLMRequest):
+        self.stream_calls += 1
+        self.requests.append(request)
+        user_message = request.messages[-1]["content"]
+        yield LLMStreamEvent(content="Echo: ")
+        yield LLMStreamEvent(content=user_message)
 
 
 class ChatApiTests(unittest.TestCase):
@@ -49,7 +61,10 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("text/event-stream", response.headers["content-type"])
         self.assertTrue(response.headers["X-Session-ID"])
         self.assertEqual(response.headers["X-Total-User-Messages"], "1")
-        self.assertIn('data: {"content": "Echo: hello"}', response.text)
+        self.assertEqual(provider.stream_calls, 1)
+        self.assertEqual(provider.complete_calls, 0)
+        self.assertIn('data: {"content": "Echo: "}', response.text)
+        self.assertIn('data: {"content": "hello"}', response.text)
         self.assertIn("data: [DONE]", response.text)
 
     def test_chat_reuses_session_history_for_follow_up_turns(self) -> None:
@@ -103,6 +118,85 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("Page context:", sent_message)
         self.assertIn("Title: YOLO Export", sent_message)
         self.assertIn("User message:\nwhat page is this?", sent_message)
+
+
+class StaticRetriever:
+    async def retrieve(self, query: str, top_k: int = 3) -> list[RetrievalResult]:
+        return [
+            RetrievalResult(
+                document=Document(
+                    id="doc-1",
+                    title="Training Docs",
+                    content="Use model.train(data='coco8.yaml', epochs=100).",
+                ),
+                score=0.9,
+                reason=f"Test retriever top_k={top_k}",
+            )
+        ]
+
+
+class OrchestratorRetrievalTests(unittest.TestCase):
+    def test_main_prompt_does_not_expose_internal_mode_or_budget(self) -> None:
+        provider = RecordingProvider()
+        orchestrator = RAGOrchestrator(provider=provider, model="test-model")
+
+        run(orchestrator.answer("hello", mode="deep"))
+
+        main_prompt = provider.requests[0].messages[0]["content"]
+        self.assertIn("YoloRAG", main_prompt)
+        self.assertIn("Ultralytics YOLO documentation", main_prompt)
+        self.assertNotIn("Mode=", main_prompt)
+        self.assertNotIn("reasoning_budget", main_prompt)
+        self.assertEqual(provider.requests[0].mode, "deep")
+
+    def test_forced_retrieval_adds_context_to_llm_request(self) -> None:
+        provider = RecordingProvider()
+        orchestrator = RAGOrchestrator(
+            provider=provider,
+            model="test-model",
+            retriever=StaticRetriever(),
+            force_retrieval=True,
+            retrieval_top_k=5,
+        )
+
+        result = run(orchestrator.answer("hello"))
+
+        sent_messages = provider.requests[0].messages
+        context_messages = [
+            message["content"]
+            for message in sent_messages
+            if message["role"] == "system" and "Relevant retrieved context" in message["content"]
+        ]
+        self.assertEqual(len(context_messages), 1)
+        self.assertIn("Document ID: doc-1", context_messages[0])
+        self.assertIn("Use model.train", context_messages[0])
+        self.assertTrue(result.trace.retrieval_used)
+        self.assertIn("Retrieval was forced", result.trace.route_reason)
+        self.assertGreaterEqual(result.trace.total_ms, result.trace.llm_ms)
+        self.assertGreaterEqual(result.trace.retrieval_ms, 0)
+        self.assertEqual(result.trace.llm_ms, 1)
+
+    def test_forced_retrieval_reinjects_context_on_follow_up_turns(self) -> None:
+        provider = RecordingProvider()
+        orchestrator = RAGOrchestrator(
+            provider=provider,
+            model="test-model",
+            retriever=StaticRetriever(),
+            force_retrieval=True,
+            retrieval_top_k=5,
+        )
+
+        run(orchestrator.answer("hello", conversation_id="thread-1"))
+        run(orchestrator.answer("thanks", conversation_id="thread-1"))
+
+        second_request_messages = provider.requests[1].messages
+        self.assertTrue(
+            any(
+                message["role"] == "system"
+                and "Relevant retrieved context" in message["content"]
+                for message in second_request_messages
+            )
+        )
 
 
 if __name__ == "__main__":

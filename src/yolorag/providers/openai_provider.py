@@ -4,7 +4,7 @@ import time
 
 from openai import AsyncOpenAI
 
-from yolorag.providers.base import LLMRequest, LLMResponse
+from yolorag.providers.base import LLMRequest, LLMResponse, LLMStreamEvent
 from yolorag.usage.cost_calculator import CostCalculator
 from yolorag.usage.extractors import OpenAIUsageExtractor
 
@@ -58,6 +58,29 @@ class OpenAIProvider:
             tool_calls=tool_calls,
         )
 
+    async def stream_complete(self, request: LLMRequest):
+        kwargs = self._stream_completion_kwargs(request)
+        stream = await self.client.chat.completions.create(**kwargs)
+
+        async for chunk in stream:
+            raw_chunk = chunk.model_dump()
+            usage = (
+                self.usage_extractor.extract(raw_chunk)
+                if raw_chunk.get("usage")
+                else None
+            )
+            for choice in raw_chunk.get("choices", []):
+                delta = choice.get("delta") or {}
+                content = delta.get("content") or ""
+                if content:
+                    yield LLMStreamEvent(
+                        content=content,
+                        usage=usage,
+                        raw_chunk=raw_chunk,
+                    )
+            if usage is not None:
+                yield LLMStreamEvent(usage=usage, raw_chunk=raw_chunk)
+
     def _completion_kwargs(self, request: LLMRequest) -> dict:
         kwargs = {
             "model": request.model,
@@ -75,6 +98,13 @@ class OpenAIProvider:
                 kwargs["max_tokens"] = request.max_tokens
         if request.tools:
             kwargs["tools"] = request.tools
+        return kwargs
+
+    def _stream_completion_kwargs(self, request: LLMRequest) -> dict:
+        kwargs = self._completion_kwargs(request)
+        kwargs["stream"] = True
+        if self.provider_name == "openai":
+            kwargs["stream_options"] = {"include_usage": True}
         return kwargs
 
     def _uses_reasoning_controls(self, model: str) -> bool:
