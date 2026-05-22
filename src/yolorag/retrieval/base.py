@@ -13,13 +13,24 @@ class Document:
 
 
 @dataclass(frozen=True)
+class RetrievalTrace:
+    provider: str
+    total_ms: int
+    vector_search_ms: int = 0
+    rerank_ms: int = 0
+    candidate_count: int = 0
+    returned_count: int = 0
+    reranked: bool = False
+
+
+@dataclass(frozen=True)
 class RetrievalResult:
     document: Document
     score: float
     reason: str
+    trace: RetrievalTrace | None = None
 
 
 class Retriever(Protocol):
     async def retrieve(self, query: str, top_k: int = 3) -> list[RetrievalResult]:
         ...
-

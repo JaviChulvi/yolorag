@@ -7,7 +7,9 @@ requires-python = ">=3.12"
 dependencies = [
   "fastapi",
   "genai-prices",
+  "dnspython",
   "openai",
+  "pymongo",
   "python-dotenv",
   "uvicorn",
 ]
