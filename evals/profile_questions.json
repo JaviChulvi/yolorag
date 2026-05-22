@@ -1,0 +1,182 @@
+[
+  {
+    "id": "profile-001",
+    "question": "What are the main differences between YOLOv8 and YOLO11 in terms of speed and accuracy?",
+    "tags": ["models", "comparison"],
+    "expected_source_paths": ["en/models/yolov8.md", "en/models/yolo11.md"]
+  },
+  {
+    "id": "profile-002",
+    "question": "Show a minimal Python snippet to run inference with a YOLO11n model on a single image.",
+    "tags": ["predict", "python"],
+    "expected_source_paths": ["en/modes/predict.md", "en/usage/python.md"]
+  },
+  {
+    "id": "profile-003",
+    "question": "How do I convert a YOLO dataset into COCO format, and when should I prefer one over the other?",
+    "tags": ["datasets", "conversion"],
+    "expected_source_paths": ["en/datasets/detect/coco.md", "en/guides/coco-to-yolo.md"]
+  },
+  {
+    "id": "profile-004",
+    "question": "Explain what the 'conf' and 'iou' thresholds do in YOLO inference.",
+    "tags": ["predict", "thresholds"],
+    "expected_source_paths": ["en/modes/predict.md"]
+  },
+  {
+    "id": "profile-005",
+    "question": "What is the best way to speed up YOLO inference on edge devices like Jetson?",
+    "tags": ["deployment", "edge", "jetson"],
+    "expected_source_paths": ["en/guides/nvidia-jetson.md", "en/integrations/tensorrt.md", "en/modes/export.md"]
+  },
+  {
+    "id": "profile-006",
+    "question": "Give me a short explanation of Ultralytics HUB and how it helps with training management.",
+    "tags": ["platform", "hub"],
+    "expected_source_paths": ["en/platform/index.md", "en/platform/train/index.md"]
+  },
+  {
+    "id": "profile-007",
+    "question": "How do I fine-tune YOLO on a custom dataset with class imbalance?",
+    "tags": ["train", "datasets"],
+    "expected_source_paths": ["en/modes/train.md", "en/guides/model-training-tips.md"]
+  },
+  {
+    "id": "profile-008",
+    "question": "List common training hyperparameters that affect mAP the most for YOLO.",
+    "tags": ["train", "hyperparameters"],
+    "expected_source_paths": ["en/modes/train.md", "en/guides/hyperparameter-tuning.md"]
+  },
+  {
+    "id": "profile-009",
+    "question": "What is the recommended image size for training YOLO11 models and why?",
+    "tags": ["train", "models"],
+    "expected_source_paths": ["en/modes/train.md", "en/models/yolo11.md"]
+  },
+  {
+    "id": "profile-010",
+    "question": "How do I export YOLO models to TensorRT for deployment?",
+    "tags": ["export", "tensorrt"],
+    "expected_source_paths": ["en/modes/export.md", "en/integrations/tensorrt.md"]
+  },
+  {
+    "id": "profile-011",
+    "question": "Explain the difference between NMS and Soft-NMS in the context of YOLO.",
+    "tags": ["predict", "nms"],
+    "expected_source_paths": ["en/modes/predict.md", "en/modes/export.md"]
+  },
+  {
+    "id": "profile-012",
+    "question": "Can I train YOLO on video frames directly? What is the suggested pipeline?",
+    "tags": ["train", "video", "datasets"],
+    "expected_source_paths": ["en/modes/train.md", "en/guides/data-collection-and-annotation.md"]
+  },
+  {
+    "id": "profile-013",
+    "question": "Write a YAML snippet for a custom dataset with train/val/test paths.",
+    "tags": ["datasets", "yaml"],
+    "expected_source_paths": ["en/datasets/detect/index.md", "en/modes/train.md"]
+  },
+  {
+    "id": "profile-014",
+    "question": "How do I set up multi-GPU training with Ultralytics in PyTorch?",
+    "tags": ["train", "multi-gpu"],
+    "expected_source_paths": ["en/modes/train.md", "en/yolov5/tutorials/multi_gpu_training.md"]
+  },
+  {
+    "id": "profile-015",
+    "question": "Describe best practices for labeling datasets for object detection.",
+    "tags": ["datasets", "labeling"],
+    "expected_source_paths": ["en/guides/data-collection-and-annotation.md", "en/guides/model-training-tips.md"]
+  },
+  {
+    "id": "profile-016",
+    "question": "What are typical causes of overfitting in YOLO training and how can I mitigate them?",
+    "tags": ["train", "overfitting"],
+    "expected_source_paths": ["en/modes/train.md", "en/guides/model-training-tips.md"]
+  },
+  {
+    "id": "profile-017",
+    "question": "Explain how Ultralytics handles mosaic and mixup augmentations.",
+    "tags": ["train", "augmentation"],
+    "expected_source_paths": ["en/guides/yolo-data-augmentation.md", "en/modes/train.md"]
+  },
+  {
+    "id": "profile-018",
+    "question": "Give a concise overview of YOLO tracking modes and when to use them.",
+    "tags": ["track"],
+    "expected_source_paths": ["en/modes/track.md"]
+  },
+  {
+    "id": "profile-019",
+    "question": "How do I run YOLO in a Docker container with GPU support?",
+    "tags": ["deployment", "docker"],
+    "expected_source_paths": ["en/guides/docker-quickstart.md"]
+  },
+  {
+    "id": "profile-020",
+    "question": "What is the difference between yolov8n and yolov8x in terms of size and use cases?",
+    "tags": ["models", "comparison"],
+    "expected_source_paths": ["en/models/yolov8.md"]
+  },
+  {
+    "id": "profile-021",
+    "question": "Explain how to evaluate YOLO with mAP@50-95 and why the range matters.",
+    "tags": ["metrics", "val"],
+    "expected_source_paths": ["en/guides/yolo-performance-metrics.md", "en/modes/val.md"]
+  },
+  {
+    "id": "profile-022",
+    "question": "How do I set seed/reproducibility flags in Ultralytics training?",
+    "tags": ["train", "reproducibility"],
+    "expected_source_paths": ["en/modes/train.md"]
+  },
+  {
+    "id": "profile-023",
+    "question": "What are good strategies for reducing false positives in YOLO detection?",
+    "tags": ["predict", "train"],
+    "expected_source_paths": ["en/modes/predict.md", "en/guides/model-training-tips.md"]
+  },
+  {
+    "id": "profile-024",
+    "question": "Can you outline a full training command for YOLO11s with 100 epochs and 640 img size?",
+    "tags": ["train", "cli"],
+    "expected_source_paths": ["en/modes/train.md", "en/models/yolo11.md"]
+  },
+  {
+    "id": "profile-025",
+    "question": "Explain what 'autoanchor' does and when it should be disabled.",
+    "tags": ["legacy", "yolov5"],
+    "expected_source_paths": ["en/yolov5/tutorials/train_custom_data.md", "en/yolov5/tutorials/tips_for_best_training_results.md"]
+  },
+  {
+    "id": "profile-026",
+    "question": "How do I use Ultralytics to segment objects instead of detect them?",
+    "tags": ["segment"],
+    "expected_source_paths": ["en/tasks/segment.md", "en/models/yolo11.md"]
+  },
+  {
+    "id": "profile-027",
+    "question": "What are the steps to export YOLO to ONNX and validate the outputs?",
+    "tags": ["export", "onnx", "val"],
+    "expected_source_paths": ["en/modes/export.md", "en/integrations/onnx.md"]
+  },
+  {
+    "id": "profile-028",
+    "question": "Write a short guide to deploying YOLO on a FastAPI server with a REST endpoint.",
+    "tags": ["deployment", "api"],
+    "expected_source_paths": ["en/modes/predict.md", "en/guides/model-deployment-practices.md"]
+  },
+  {
+    "id": "profile-029",
+    "question": "How do I benchmark YOLO inference FPS consistently across devices?",
+    "tags": ["benchmark", "deployment"],
+    "expected_source_paths": ["en/modes/benchmark.md"]
+  },
+  {
+    "id": "profile-030",
+    "question": "Explain how Ultralytics handles model pruning or quantization options.",
+    "tags": ["export", "optimization", "quantization"],
+    "expected_source_paths": ["en/modes/export.md", "en/integrations/tensorrt.md", "en/guides/model-deployment-practices.md"]
+  }
+]

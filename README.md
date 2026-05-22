@@ -90,6 +90,29 @@ DeepSeek fast mode explicitly disables thinking. DeepSeek deep mode enables thin
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
+## Latency Evals
+
+Run the profile questions against MongoDB retrieval only:
+
+```bash
+PYTHONPATH=src python scripts/eval_profile_latency.py --retrieval-only
+```
+
+Compare smaller rerank candidate pools:
+
+```bash
+PYTHONPATH=src python scripts/eval_profile_latency.py --retrieval-only --rerank-candidates 32
+PYTHONPATH=src python scripts/eval_profile_latency.py --retrieval-only --rerank-candidates 16
+```
+
+Run the same questions through the full RAG path, including the configured LLM:
+
+```bash
+PYTHONPATH=src python scripts/eval_profile_latency.py --top-k 8 --mode fast
+```
+
+Each run prints Mongo vector search, reranking, LLM, and app-overhead timings, then writes a JSON report under `evals/runs/`.
+
 ## Architecture
 
 `providers/` owns model API calls and normalizes responses into `LLMResponse`.
