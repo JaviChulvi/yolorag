@@ -9,8 +9,11 @@ dependencies = [
   "genai-prices",
   "dnspython",
   "openai",
+  "pgvector",
   "pymongo",
+  "psycopg[binary]",
   "python-dotenv",
+  "sqlalchemy",
   "uvicorn",
 ]
 

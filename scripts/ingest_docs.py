@@ -11,8 +11,8 @@ from yolorag.ingestion.docs_chunker import (
     DEFAULT_MAX_CHARS,
     DEFAULT_OVERLAP_CHARS,
 )
+from yolorag.knowledge.factory import build_knowledge_store
 from yolorag.knowledge.pipeline import build_docs_records, ingest_records, summarize_records
-from yolorag.knowledge.stores.mongodb import MongoKnowledgeStore, MongoKnowledgeStoreConfig
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -26,9 +26,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--provider",
-        choices=["mongodb"],
+        choices=["mongodb", "postgresql"],
         default="mongodb",
-        help="Knowledge-store provider. Only mongodb is implemented for now.",
+        help="Knowledge-store provider.",
     )
     parser.add_argument(
         "--docs-root",
@@ -86,13 +86,11 @@ def main() -> int:
         print("Dry run only. Re-run with --write to persist records.")
         return 0
 
-    store = MongoKnowledgeStore(MongoKnowledgeStoreConfig.from_env())
+    store = build_knowledge_store(args.provider)
     store.ping()
     print()
     print("Target:")
-    print(f"  database: {store.config.database}")
-    print(f"  collection: {store.config.collection}")
-    print(f"  vector_index: {store.config.vector_index}")
+    _print_store_target(store)
     result = ingest_records(store, records, batch_size=args.batch_size)
 
     print()
@@ -102,6 +100,21 @@ def main() -> int:
     print(f"  matched: {result.matched}")
     print(f"  modified: {result.modified}")
     return 0
+
+
+def _print_store_target(store: object) -> None:
+    config = getattr(store, "config", None)
+    if getattr(store, "provider_name", "") == "mongodb":
+        print(f"  database: {config.database}")
+        print(f"  collection: {config.collection}")
+        print(f"  vector_index: {config.vector_index}")
+        return
+    if getattr(store, "provider_name", "") == "postgresql":
+        print(f"  dsn: {config.dsn}")
+        print(f"  table: {config.table}")
+        print(f"  embedding_dimensions: {config.embedding_dimensions}")
+        return
+    print(f"  provider: {getattr(store, 'provider_name', 'unknown')}")
 
 
 if __name__ == "__main__":

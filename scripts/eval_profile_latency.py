@@ -13,7 +13,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from yolorag.knowledge.stores.mongodb import MongoKnowledgeStore, MongoKnowledgeStoreConfig
+from yolorag.knowledge.factory import build_knowledge_store, selected_knowledge_provider
 from yolorag.retrieval.mongodb import MongoReranker, MongoVectorRetriever
 from yolorag.runtime import build_runtime
 
@@ -52,6 +52,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS_PATH)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--provider", choices=["openai", "deepseek"])
+    parser.add_argument(
+        "--knowledge-provider",
+        choices=["mongodb", "postgresql"],
+        default=os.getenv("YOLORAG_KNOWLEDGE_PROVIDER", "mongodb"),
+        help="Knowledge store to use for retrieval.",
+    )
     parser.add_argument("--mode", choices=["fast", "deep"], default=os.getenv("YOLORAG_API_MODE", "fast"))
     parser.add_argument("--top-k", type=int, default=int(os.getenv("YOLORAG_CHAT_VECTOR_TOP_K", "8")))
     parser.add_argument(
@@ -66,12 +72,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--retrieval-only",
         action="store_true",
-        help="Measure Mongo vector search and reranking without calling the LLM provider.",
+        help="Measure vector search and reranking without calling the LLM provider.",
     )
     parser.add_argument(
         "--no-rerank",
         action="store_true",
-        help="Disable Mongo reranking for retrieval-only experiments.",
+        help="Disable reranking for retrieval-only experiments.",
     )
     parser.add_argument(
         "--include-answers",
@@ -91,6 +97,7 @@ def _load_cases(path: Path, *, limit: int | None) -> list[dict[str, Any]]:
 async def _run_full_rag(args: argparse.Namespace, cases: list[dict[str, Any]]) -> dict[str, Any]:
     if args.rerank_candidates is not None:
         os.environ["YOLORAG_RERANK_CANDIDATE_LIMIT"] = str(args.rerank_candidates)
+    os.environ["YOLORAG_KNOWLEDGE_PROVIDER"] = args.knowledge_provider
     runtime = build_runtime(provider_name=args.provider, mode=args.mode)
     runtime.orchestrator.retrieval_top_k = args.top_k
 
@@ -119,7 +126,7 @@ async def _run_full_rag(args: argparse.Namespace, cases: list[dict[str, Any]]) -
         print(
             f"{index:02d}/{len(cases)} {case['id']} "
             f"total={result.trace.total_ms}ms retrieval={result.trace.retrieval_ms}ms "
-            f"mongo={result.trace.vector_search_ms}ms rerank={result.trace.rerank_ms}ms "
+            f"vector={result.trace.vector_search_ms}ms rerank={result.trace.rerank_ms}ms "
             f"llm={result.trace.llm_ms}ms"
         )
 
@@ -132,7 +139,7 @@ async def _run_full_rag(args: argparse.Namespace, cases: list[dict[str, Any]]) -
 
 
 async def _run_retrieval_only(args: argparse.Namespace, cases: list[dict[str, Any]]) -> dict[str, Any]:
-    store = MongoKnowledgeStore(MongoKnowledgeStoreConfig.from_env())
+    store = build_knowledge_store(args.knowledge_provider)
     retriever = MongoVectorRetriever(
         store=store,
         reranker=None if args.no_rerank else MongoReranker.from_env(),
@@ -162,7 +169,8 @@ async def _run_retrieval_only(args: argparse.Namespace, cases: list[dict[str, An
         timings = row["trace"]
         print(
             f"{index:02d}/{len(cases)} {case['id']} "
-            f"total={timings['total_ms']}ms mongo={timings['vector_search_ms']}ms "
+            f"total={timings['total_ms']}ms embedding={timings['query_embedding_ms']}ms "
+            f"vector={timings['vector_search_ms']}ms "
             f"rerank={timings['rerank_ms']}ms candidates={timings['retrieval_candidate_count']}"
         )
 
@@ -179,6 +187,7 @@ def _retrieval_only_trace(trace: Any) -> dict[str, Any]:
         return {
             "total_ms": 0,
             "retrieval_ms": 0,
+            "query_embedding_ms": 0,
             "vector_search_ms": 0,
             "rerank_ms": 0,
             "llm_ms": 0,
@@ -191,6 +200,7 @@ def _retrieval_only_trace(trace: Any) -> dict[str, Any]:
     return {
         "total_ms": trace.total_ms,
         "retrieval_ms": trace.total_ms,
+        "query_embedding_ms": trace.query_embedding_ms,
         "vector_search_ms": trace.vector_search_ms,
         "rerank_ms": trace.rerank_ms,
         "llm_ms": 0,
@@ -214,6 +224,7 @@ def _report(
             "created_at": datetime.now(UTC).isoformat(),
             "mode": mode,
             "provider": args.provider or os.getenv("YOLORAG_API_PROVIDER", "openai"),
+            "knowledge_provider": selected_knowledge_provider(args.knowledge_provider),
             "response_mode": args.mode,
             "top_k": args.top_k,
             "rerank_candidate_limit": args.rerank_candidates
@@ -230,6 +241,7 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     timing_fields = [
         "total_ms",
         "retrieval_ms",
+        "query_embedding_ms",
         "vector_search_ms",
         "rerank_ms",
         "llm_ms",
@@ -297,7 +309,8 @@ def _print_summary(report: dict[str, Any]) -> None:
     for field, label in [
         ("total_ms", "total"),
         ("retrieval_ms", "retrieval total"),
-        ("vector_search_ms", "mongodb vector"),
+        ("query_embedding_ms", "query embedding"),
+        ("vector_search_ms", "vector db"),
         ("rerank_ms", "rerank"),
         ("llm_ms", "llm"),
         ("orchestration_overhead_ms", "app overhead"),

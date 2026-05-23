@@ -16,6 +16,7 @@ class Document:
 class RetrievalTrace:
     provider: str
     total_ms: int
+    query_embedding_ms: int = 0
     vector_search_ms: int = 0
     rerank_ms: int = 0
     candidate_count: int = 0

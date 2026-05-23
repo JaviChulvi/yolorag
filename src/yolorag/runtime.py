@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from yolorag.config.model_defaults import default_model_for
 from yolorag.config.settings import getenv
 from yolorag.core.orchestrator import OrchestratorResult, RAGOrchestrator
-from yolorag.knowledge.stores.mongodb import MongoKnowledgeStore, MongoKnowledgeStoreConfig
+from yolorag.knowledge.factory import build_knowledge_store
 from yolorag.providers.base import ResponseMode
 from yolorag.providers.deepseek_provider import DeepSeekProvider
 from yolorag.providers.openai_provider import OpenAIProvider
@@ -115,7 +115,7 @@ def _require_env(name: str) -> str:
 
 
 def _build_retriever() -> Retriever | None:
-    store = MongoKnowledgeStore(MongoKnowledgeStoreConfig.from_env())
+    store = build_knowledge_store()
     return MongoVectorRetriever(
         store=store,
         reranker=MongoReranker.from_env(),

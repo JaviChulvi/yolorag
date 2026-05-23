@@ -52,7 +52,9 @@ class MongoVectorRetriever:
             limit=candidate_limit,
             filters=self.filters or None,
         )
-        vector_search_ms = _elapsed_ms(vector_started)
+        store_call_ms = _elapsed_ms(vector_started)
+        query_embedding_ms = int(getattr(self.store, "last_query_embedding_ms", 0) or 0)
+        vector_search_ms = max(store_call_ms - query_embedding_ms, 0)
 
         if self.reranker is None:
             reranked = [
@@ -73,6 +75,7 @@ class MongoVectorRetriever:
         trace = RetrievalTrace(
             provider=getattr(self.store, "provider_name", "unknown"),
             total_ms=_elapsed_ms(retrieval_started),
+            query_embedding_ms=query_embedding_ms,
             vector_search_ms=vector_search_ms,
             rerank_ms=rerank_ms,
             candidate_count=len(candidates),
@@ -100,6 +103,7 @@ class MongoVectorRetriever:
                     rerank_score=item.relevance_score,
                     rank=index,
                     reranked=self.reranker is not None,
+                    provider=getattr(self.store, "provider_name", "unknown"),
                 ),
                 trace=trace,
             )
@@ -213,12 +217,25 @@ def _reason(
     rerank_score: float,
     rank: int,
     reranked: bool,
+    provider: str,
 ) -> str:
     vector_text = f"{vector_score:.6f}" if vector_score is not None else "n/a"
+    provider_label = _provider_label(provider)
     if not reranked:
-        return f"Selected by MongoDB vector search at rank {rank} with vector score {vector_text}."
+        return (
+            f"Selected by {provider_label} vector search at rank {rank} "
+            f"with vector score {vector_text}."
+        )
     return (
-        "Selected by MongoDB vector search, then reranked by MongoDB "
+        f"Selected by {provider_label} vector search, then reranked by MongoDB "
         f"at rank {rank} with relevance score {rerank_score:.6f} "
         f"(vector score {vector_text})."
     )
+
+
+def _provider_label(provider: str) -> str:
+    labels = {
+        "mongodb": "MongoDB",
+        "postgresql": "PostgreSQL pgvector",
+    }
+    return labels.get(provider, provider)

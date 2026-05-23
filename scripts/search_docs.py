@@ -6,7 +6,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from yolorag.knowledge.stores.mongodb import MongoKnowledgeStore, MongoKnowledgeStoreConfig
+from yolorag.knowledge.factory import build_knowledge_store
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +17,7 @@ def main() -> int:
 
     parser = argparse.ArgumentParser(description="Run vector search against the knowledge store.")
     parser.add_argument("query", help="Natural-language search query.")
-    parser.add_argument("--provider", choices=["mongodb"], default="mongodb")
+    parser.add_argument("--provider", choices=["mongodb", "postgresql"], default="mongodb")
     parser.add_argument("--limit", type=int, default=5)
     parser.add_argument("--kind", help="Optional kind filter, for example article or reference.")
     parser.add_argument("--doc-id", help="Optional doc_id filter.")
@@ -32,13 +32,14 @@ def main() -> int:
     if args.source_path:
         filters["source_path"] = args.source_path
 
-    store = MongoKnowledgeStore(MongoKnowledgeStoreConfig.from_env())
+    store = build_knowledge_store(args.provider)
     store.ping()
-    index_names = store.search_index_names()
-    if store.config.vector_index not in index_names:
-        print(f"Configured vector index not found: {store.config.vector_index}")
-        print(f"Available search indexes: {', '.join(index_names) if index_names else '(none)'}")
-        return 4
+    if getattr(store, "provider_name", "") == "mongodb":
+        index_names = store.search_index_names()
+        if store.config.vector_index not in index_names:
+            print(f"Configured vector index not found: {store.config.vector_index}")
+            print(f"Available search indexes: {', '.join(index_names) if index_names else '(none)'}")
+            return 4
 
     results = store.vector_search(
         args.query,
@@ -47,7 +48,12 @@ def main() -> int:
     )
 
     print(f"Provider: {args.provider}")
-    print(f"Index: {store.config.vector_index}")
+    if getattr(store, "provider_name", "") == "mongodb":
+        print(f"Index: {store.config.vector_index}")
+    if getattr(store, "provider_name", "") == "postgresql":
+        print(f"Table: {store.config.table}")
+        print(f"Embedding model: {store.embedding_client.model}")
+        print(f"Embedding dimensions: {store.config.embedding_dimensions}")
     print(f"Query: {args.query}")
     print(f"Results: {len(results)}")
     print()
