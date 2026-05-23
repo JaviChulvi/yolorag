@@ -1,40 +1,29 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
-from yolorag.providers.base import Message
-
-
-@dataclass
-class ConversationTurn:
-    user_message: str
-    assistant_message: str
-    retrieved_document_ids: list[str] = field(default_factory=list)
+from datetime import UTC, datetime
+from typing import Any, Literal, Protocol
 
 
-@dataclass
-class ConversationState:
+ChatRole = Literal["user", "assistant"]
+
+
+@dataclass(frozen=True)
+class ConversationMessageLog:
     conversation_id: str
-    turns: list[ConversationTurn] = field(default_factory=list)
-    retrieved_document_ids: set[str] = field(default_factory=set)
-
-    def recent_messages(self, limit: int = 6) -> list[Message]:
-        messages: list[Message] = []
-        for turn in self.turns[-limit:]:
-            messages.append({"role": "user", "content": turn.user_message})
-            messages.append({"role": "assistant", "content": turn.assistant_message})
-        return messages
-
-    def add_turn(self, turn: ConversationTurn) -> None:
-        self.turns.append(turn)
-        self.retrieved_document_ids.update(turn.retrieved_document_ids)
+    role: ChatRole
+    content: str
+    created_at: datetime = field(default_factory=lambda: datetime.now(UTC))
+    request_id: str | None = None
+    message_index: int | None = None
+    provider: str | None = None
+    model: str | None = None
+    retrieved_document_ids: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class InMemoryConversationStore:
-    def __init__(self) -> None:
-        self._states: dict[str, ConversationState] = {}
+class ConversationLogger(Protocol):
+    provider_name: str
 
-    def get(self, conversation_id: str) -> ConversationState:
-        if conversation_id not in self._states:
-            self._states[conversation_id] = ConversationState(conversation_id=conversation_id)
-        return self._states[conversation_id]
+    def append_messages(self, messages: list[ConversationMessageLog]) -> None:
+        """Persist completed chat messages without serving them back as context."""

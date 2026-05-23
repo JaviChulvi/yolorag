@@ -67,6 +67,30 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn('data: {"content": "hello"}', response.text)
         self.assertIn("data: [DONE]", response.text)
 
+    def test_chat_streams_llm_answer_when_retrieval_fails(self) -> None:
+        provider = RecordingProvider()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(
+                provider=provider,
+                model="test-model",
+                retriever=FailingRetriever(),
+                force_retrieval=True,
+            )
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        with self.assertLogs("yolorag.core.orchestrator", level="WARNING"):
+            response = client.post(
+                "/api/chat",
+                json={"messages": [{"role": "user", "content": "hello"}]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data: {"content": "Echo: "}', response.text)
+        self.assertIn('data: {"content": "hello"}', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertNotIn("Chat generation failed", response.text)
+
     def test_chat_reuses_session_history_for_follow_up_turns(self) -> None:
         provider = RecordingProvider()
         runtime = YoloRAGRuntime(
@@ -83,7 +107,11 @@ class ChatApiTests(unittest.TestCase):
             "/api/chat",
             json={
                 "session_id": session_id,
-                "messages": [{"role": "user", "content": "second"}],
+                "messages": [
+                    {"role": "user", "content": "first"},
+                    {"role": "assistant", "content": "Echo: first"},
+                    {"role": "user", "content": "second"},
+                ],
             },
         )
 
@@ -133,6 +161,11 @@ class StaticRetriever:
                 reason=f"Test retriever top_k={top_k}",
             )
         ]
+
+
+class FailingRetriever:
+    async def retrieve(self, query: str, top_k: int = 3) -> list[RetrievalResult]:
+        raise RuntimeError("vector store unavailable")
 
 
 class OrchestratorRetrievalTests(unittest.TestCase):
@@ -195,6 +228,31 @@ class OrchestratorRetrievalTests(unittest.TestCase):
                 message["role"] == "system"
                 and "Relevant retrieved context" in message["content"]
                 for message in second_request_messages
+            )
+        )
+
+    def test_retrieval_failure_falls_back_to_llm_only_answer(self) -> None:
+        provider = RecordingProvider()
+        orchestrator = RAGOrchestrator(
+            provider=provider,
+            model="test-model",
+            retriever=FailingRetriever(),
+            force_retrieval=True,
+        )
+
+        with self.assertLogs("yolorag.core.orchestrator", level="WARNING"):
+            result = run(orchestrator.answer("hello"))
+
+        self.assertEqual(result.answer, "Echo: hello")
+        self.assertFalse(result.trace.retrieval_used)
+        self.assertEqual(
+            result.trace.retrieval_error,
+            "RuntimeError: vector store unavailable",
+        )
+        self.assertFalse(
+            any(
+                "Relevant retrieved context" in message["content"]
+                for message in provider.requests[0].messages
             )
         )
 

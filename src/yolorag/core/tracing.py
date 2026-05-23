@@ -28,3 +28,4 @@ class OrchestrationTrace:
     retrieval_candidate_count: int = 0
     retrieval_returned_count: int = 0
     retrieval_reranked: bool = False
+    retrieval_error: str | None = None

@@ -1,16 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from yolorag.core.conversation import (
-    ConversationTurn,
-    InMemoryConversationStore,
-)
+from yolorag.core.conversation import ConversationLogger, ConversationMessageLog
 from yolorag.core.routing import SimpleRoutePlanner
 from yolorag.core.tracing import OrchestrationTrace
-from yolorag.providers.base import LLMProvider, LLMRequest, ResponseMode
+from yolorag.providers.base import LLMProvider, LLMRequest, Message, ResponseMode
 from yolorag.retrieval.base import RetrievalResult, Retriever
 
 
@@ -31,6 +30,8 @@ For technical answers, give concrete commands or Python examples when useful. Ke
 concise by default, but include enough detail for the user to act.
 """
 
+logger = logging.getLogger(__name__)
+
 
 @dataclass(frozen=True)
 class OrchestratorResult:
@@ -45,7 +46,7 @@ class RAGOrchestrator:
         provider: LLMProvider,
         model: str,
         retriever: Retriever | None = None,
-        conversation_store: InMemoryConversationStore | None = None,
+        conversation_logger: ConversationLogger | None = None,
         route_planner: SimpleRoutePlanner | None = None,
         force_retrieval: bool = False,
         retrieval_top_k: int | None = None,
@@ -53,7 +54,7 @@ class RAGOrchestrator:
         self.provider = provider
         self.model = model
         self.retriever = retriever
-        self.conversation_store = conversation_store or InMemoryConversationStore()
+        self.conversation_logger = conversation_logger
         self.route_planner = route_planner or SimpleRoutePlanner()
         self.force_retrieval = force_retrieval
         self.retrieval_top_k = retrieval_top_k
@@ -63,34 +64,33 @@ class RAGOrchestrator:
         user_message: str,
         conversation_id: str = "default",
         mode: ResponseMode = "fast",
+        conversation_messages: list[Message] | None = None,
+        raw_user_message: str | None = None,
+        request_id: str | None = None,
+        user_message_index: int | None = None,
     ) -> OrchestratorResult:
         total_started = time.perf_counter()
-        state = self.conversation_store.get(conversation_id)
         plan = self.route_planner.plan(user_message=user_message, requested_mode=mode)
+        self._schedule_user_message_write(
+            conversation_id=conversation_id,
+            request_id=request_id,
+            raw_user_message=raw_user_message or user_message,
+            user_message_index=user_message_index,
+        )
         retrieval_started = time.perf_counter()
-        retrieved_context = await self._retrieve_if_needed(
+        retrieved_context, retrieval_error = await self._retrieve_if_needed(
             user_message=user_message,
-            existing_document_ids=set() if self.force_retrieval else state.retrieved_document_ids,
+            existing_document_ids=set(),
             should_retrieve=plan.should_retrieve or self.force_retrieval,
             top_k=self.retrieval_top_k or plan.top_k,
         )
         retrieval_ms = _elapsed_ms(retrieval_started)
 
-        messages = [
-            {
-                "role": "system",
-                "content": MAIN_SYSTEM_PROMPT,
-            },
-            *state.recent_messages(),
-        ]
-        if retrieved_context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": self._format_context(retrieved_context),
-                }
-            )
-        messages.append({"role": "user", "content": user_message})
+        messages = self._request_messages(
+            user_message=user_message,
+            conversation_messages=conversation_messages,
+            retrieved_context=retrieved_context,
+        )
 
         response = await self.provider.complete(
             LLMRequest(
@@ -107,12 +107,14 @@ class RAGOrchestrator:
         llm_ms = response.latency_ms
         total_ms = max(_elapsed_ms(total_started), retrieval_ms + llm_ms)
         orchestration_overhead_ms = max(total_ms - retrieval_ms - llm_ms, 0)
-        state.add_turn(
-            ConversationTurn(
-                user_message=user_message,
-                assistant_message=answer,
-                retrieved_document_ids=retrieved_ids,
-            )
+        self._schedule_assistant_message_write(
+            conversation_id=conversation_id,
+            request_id=request_id,
+            assistant_message=answer,
+            user_message_index=user_message_index,
+            retrieved_document_ids=retrieved_ids,
+            provider=response.provider,
+            model=response.model,
         )
 
         trace = OrchestrationTrace(
@@ -140,6 +142,7 @@ class RAGOrchestrator:
             retrieval_candidate_count=retrieval_trace.candidate_count if retrieval_trace else 0,
             retrieval_returned_count=retrieval_trace.returned_count if retrieval_trace else 0,
             retrieval_reranked=retrieval_trace.reranked if retrieval_trace else False,
+            retrieval_error=retrieval_error,
         )
 
         return OrchestratorResult(
@@ -153,31 +156,30 @@ class RAGOrchestrator:
         user_message: str,
         conversation_id: str = "default",
         mode: ResponseMode = "fast",
+        conversation_messages: list[Message] | None = None,
+        raw_user_message: str | None = None,
+        request_id: str | None = None,
+        user_message_index: int | None = None,
     ) -> AsyncIterator[str]:
-        state = self.conversation_store.get(conversation_id)
         plan = self.route_planner.plan(user_message=user_message, requested_mode=mode)
-        retrieved_context = await self._retrieve_if_needed(
+        self._schedule_user_message_write(
+            conversation_id=conversation_id,
+            request_id=request_id,
+            raw_user_message=raw_user_message or user_message,
+            user_message_index=user_message_index,
+        )
+        retrieved_context, _retrieval_error = await self._retrieve_if_needed(
             user_message=user_message,
-            existing_document_ids=set() if self.force_retrieval else state.retrieved_document_ids,
+            existing_document_ids=set(),
             should_retrieve=plan.should_retrieve or self.force_retrieval,
             top_k=self.retrieval_top_k or plan.top_k,
         )
 
-        messages = [
-            {
-                "role": "system",
-                "content": MAIN_SYSTEM_PROMPT,
-            },
-            *state.recent_messages(),
-        ]
-        if retrieved_context:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": self._format_context(retrieved_context),
-                }
-            )
-        messages.append({"role": "user", "content": user_message})
+        messages = self._request_messages(
+            user_message=user_message,
+            conversation_messages=conversation_messages,
+            retrieved_context=retrieved_context,
+        )
 
         chunks = []
         async for event in self.provider.stream_complete(
@@ -198,12 +200,14 @@ class RAGOrchestrator:
         if source_suffix:
             yield source_suffix
         final_answer = f"{answer.rstrip()}{source_suffix}" if source_suffix else answer
-        state.add_turn(
-            ConversationTurn(
-                user_message=user_message,
-                assistant_message=final_answer,
-                retrieved_document_ids=[item.document.id for item in retrieved_context],
-            )
+        self._schedule_assistant_message_write(
+            conversation_id=conversation_id,
+            request_id=request_id,
+            assistant_message=final_answer,
+            user_message_index=user_message_index,
+            retrieved_document_ids=[item.document.id for item in retrieved_context],
+            provider=self.provider.provider_name,
+            model=self.model,
         )
 
     async def _retrieve_if_needed(
@@ -212,16 +216,122 @@ class RAGOrchestrator:
         existing_document_ids: set[str],
         should_retrieve: bool,
         top_k: int,
-    ) -> list[RetrievalResult]:
+    ) -> tuple[list[RetrievalResult], str | None]:
         if not should_retrieve or self.retriever is None:
-            return []
+            return [], None
 
-        results = await self.retriever.retrieve(user_message, top_k=top_k)
+        try:
+            results = await self.retriever.retrieve(user_message, top_k=top_k)
+        except Exception as exc:
+            retrieval_error = f"{type(exc).__name__}: {exc}"
+            logger.warning(
+                "Retrieval failed; continuing without retrieved context: %s",
+                retrieval_error,
+                exc_info=True,
+            )
+            return [], retrieval_error
+        return (
+            [
+                result
+                for result in results
+                if result.document.id not in existing_document_ids
+            ],
+            None,
+        )
+
+    def _request_messages(
+        self,
+        *,
+        user_message: str,
+        conversation_messages: list[Message] | None,
+        retrieved_context: list[RetrievalResult],
+    ) -> list[Message]:
+        body = (
+            [dict(message) for message in conversation_messages]
+            if conversation_messages
+            else [{"role": "user", "content": user_message}]
+        )
+        context_message = (
+            {"role": "system", "content": self._format_context(retrieved_context)}
+            if retrieved_context
+            else None
+        )
+        if context_message is not None:
+            last_user_index = _last_user_message_index(body)
+            if last_user_index is None:
+                body.append(context_message)
+            else:
+                body.insert(last_user_index, context_message)
+
         return [
-            result
-            for result in results
-            if result.document.id not in existing_document_ids
+            {
+                "role": "system",
+                "content": MAIN_SYSTEM_PROMPT,
+            },
+            *body,
         ]
+
+    def _schedule_user_message_write(
+        self,
+        *,
+        conversation_id: str,
+        request_id: str | None,
+        raw_user_message: str,
+        user_message_index: int | None,
+    ) -> None:
+        self._schedule_transcript_write(
+            [
+                ConversationMessageLog(
+                    conversation_id=conversation_id,
+                    role="user",
+                    content=raw_user_message,
+                    request_id=request_id,
+                    message_index=user_message_index,
+                )
+            ]
+        )
+
+    def _schedule_assistant_message_write(
+        self,
+        *,
+        conversation_id: str,
+        request_id: str | None,
+        assistant_message: str,
+        user_message_index: int | None,
+        retrieved_document_ids: list[str],
+        provider: str,
+        model: str,
+    ) -> None:
+        self._schedule_transcript_write(
+            [
+                ConversationMessageLog(
+                    conversation_id=conversation_id,
+                    role="assistant",
+                    content=assistant_message,
+                    request_id=request_id,
+                    message_index=None if user_message_index is None else user_message_index + 1,
+                    provider=provider,
+                    model=model,
+                    retrieved_document_ids=list(retrieved_document_ids),
+                )
+            ]
+        )
+
+    def _schedule_transcript_write(self, messages: list[ConversationMessageLog]) -> None:
+        if self.conversation_logger is None or not messages:
+            return
+        asyncio.create_task(self._append_transcript_messages(messages))
+
+    async def _append_transcript_messages(
+        self,
+        messages: list[ConversationMessageLog],
+    ) -> None:
+        if self.conversation_logger is None:
+            return
+        try:
+            await asyncio.to_thread(self.conversation_logger.append_messages, messages)
+        except Exception:
+            logger.warning("Failed to persist chat transcript messages.", exc_info=True)
 
     def _format_context(self, context: list[RetrievalResult]) -> str:
         blocks = []
@@ -271,3 +381,10 @@ class RAGOrchestrator:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _last_user_message_index(messages: list[Message]) -> int | None:
+    for index in range(len(messages) - 1, -1, -1):
+        if messages[index].get("role") == "user":
+            return index
+    return None

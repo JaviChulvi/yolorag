@@ -5,9 +5,10 @@ from dataclasses import dataclass
 
 from yolorag.config.model_defaults import default_model_for
 from yolorag.config.settings import getenv
+from yolorag.core.conversation_factory import build_conversation_logger
 from yolorag.core.orchestrator import OrchestratorResult, RAGOrchestrator
 from yolorag.knowledge.factory import build_knowledge_store
-from yolorag.providers.base import ResponseMode
+from yolorag.providers.base import Message, ResponseMode
 from yolorag.providers.deepseek_provider import DeepSeekProvider
 from yolorag.providers.openai_provider import OpenAIProvider
 from yolorag.retrieval.base import Retriever
@@ -22,24 +23,45 @@ class YoloRAGRuntime:
     orchestrator: RAGOrchestrator
     mode: ResponseMode = "fast"
 
-    async def answer(self, user_message: str, conversation_id: str) -> OrchestratorResult:
+    async def answer(
+        self,
+        user_message: str,
+        conversation_id: str,
+        *,
+        conversation_messages: list[Message] | None = None,
+        raw_user_message: str | None = None,
+        request_id: str | None = None,
+        user_message_index: int | None = None,
+    ) -> OrchestratorResult:
         return await self.orchestrator.answer(
             user_message=user_message,
             conversation_id=conversation_id,
             mode=self.mode,
+            conversation_messages=conversation_messages,
+            raw_user_message=raw_user_message,
+            request_id=request_id,
+            user_message_index=user_message_index,
         )
 
-    def stream_answer(self, user_message: str, conversation_id: str) -> AsyncIterator[str]:
+    def stream_answer(
+        self,
+        user_message: str,
+        conversation_id: str,
+        *,
+        conversation_messages: list[Message] | None = None,
+        raw_user_message: str | None = None,
+        request_id: str | None = None,
+        user_message_index: int | None = None,
+    ) -> AsyncIterator[str]:
         return self.orchestrator.stream_answer(
             user_message=user_message,
             conversation_id=conversation_id,
             mode=self.mode,
+            conversation_messages=conversation_messages,
+            raw_user_message=raw_user_message,
+            request_id=request_id,
+            user_message_index=user_message_index,
         )
-
-    def message_counts(self, conversation_id: str) -> tuple[int, int]:
-        state = self.orchestrator.conversation_store.get(conversation_id)
-        total = len(state.turns)
-        return total, total
 
 
 def build_runtime(
@@ -61,6 +83,7 @@ def build_runtime(
             provider=provider,
             model=selected_model,
             retriever=retriever,
+            conversation_logger=build_conversation_logger(),
             force_retrieval=retriever is not None,
             retrieval_top_k=_env_int("YOLORAG_CHAT_VECTOR_TOP_K", default=DEFAULT_CHAT_VECTOR_TOP_K),
         ),
