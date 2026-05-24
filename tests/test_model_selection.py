@@ -70,6 +70,32 @@ class ProviderRequestOptionTests(unittest.TestCase):
         self.assertEqual(kwargs["max_completion_tokens"], 512)
         self.assertNotIn("max_tokens", kwargs)
 
+    def test_openai_tool_requests_omit_chat_completion_reasoning_controls(self) -> None:
+        provider = OpenAIProvider(api_key="test-key")
+        kwargs = provider._completion_kwargs(
+            LLMRequest(
+                messages=[{"role": "user", "content": "hello"}],
+                model="gpt-5.5",
+                mode="deep",
+                max_tokens=512,
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "docs_search",
+                            "description": "Search docs.",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            )
+        )
+
+        self.assertEqual(kwargs["tools"][0]["function"]["name"], "docs_search")
+        self.assertEqual(kwargs["max_completion_tokens"], 512)
+        self.assertNotIn("reasoning_effort", kwargs)
+        self.assertNotIn("verbosity", kwargs)
+
     def test_openai_streaming_requests_usage_in_final_chunk(self) -> None:
         provider = OpenAIProvider(api_key="test-key")
         kwargs = provider._stream_completion_kwargs(

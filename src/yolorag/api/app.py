@@ -5,20 +5,27 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from yolorag.api.chat import router as chat_router
 from yolorag.config.settings import getenv
-from yolorag.runtime import YoloRAGRuntime
+from yolorag.runtime import YoloRAGAgentRuntime, YoloRAGRuntime
 
 
 EXPOSED_WIDGET_HEADERS = [
     "X-Session-ID",
     "X-Total-User-Messages",
     "X-Active-User-Messages",
+    "X-Chat-Mode",
 ]
 
 
-def create_app(runtime: YoloRAGRuntime | None = None) -> FastAPI:
+def create_app(
+    runtime: YoloRAGRuntime | None = None,
+    deep_runtime: YoloRAGAgentRuntime | None = None,
+) -> FastAPI:
     app = FastAPI(title="YoloRAG API", version="0.1.0")
     if runtime is not None:
         app.state.runtime = runtime
+        app.state.fast_runtime = runtime
+    if deep_runtime is not None:
+        app.state.deep_runtime = deep_runtime
 
     origins = _cors_origins()
     if origins:

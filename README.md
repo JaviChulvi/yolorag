@@ -7,7 +7,7 @@ The first implementation slice focuses on the architecture surfaces that matter 
 - Provider classes normalize vendor-specific responses.
 - Usage extractors convert raw provider usage into one `TokenUsage` shape.
 - Cost calculation is owned by this project, with local pricing overrides and `genai-prices` as the fallback pricing backend.
-- The orchestrator decides whether retrieval/review are needed based on response mode and request intent.
+- The orchestrator uses lightweight, score-gated retrieval so weak matches do not pollute the prompt.
 - The FastAPI chat endpoint exposes the `../llm` widget contract.
 
 ## Setup
@@ -20,7 +20,10 @@ python -m pip install -e .
 
 ## Run The Chat API
 
-The FastAPI app exposes the `../llm` widget chat contract at `POST /api/chat`.
+The FastAPI app exposes the `../llm` widget chat contract at `POST /api/chat/fast`.
+`POST /api/chat` remains as a legacy alias for the fast route. Deep agent mode is
+available at `POST /api/chat/deep` and returns only the final text response after
+the agent finishes any docs or MCP tool calls.
 
 ```bash
 PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000
@@ -29,13 +32,31 @@ PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000
 Quick smoke test:
 
 ```bash
-curl -N http://127.0.0.1:8000/api/chat \
+curl -N http://127.0.0.1:8000/api/chat/fast \
   -H "Content-Type: application/json" \
   -d '{"messages":[{"role":"user","content":"Explain YOLO in one paragraph"}]}'
 ```
 
 The endpoint returns Server-Sent Events and an `X-Session-ID` header. Send that
 same session ID on the next request to reuse the in-memory conversation history.
+
+## Hosted MCP Servers
+
+Deep chat can load tools from MCP servers configured with `YOLORAG_MCP_SERVERS`.
+The existing stdio server config still works, and hosted Streamable HTTP servers
+can be configured with `type: "http"`.
+
+Hosted GitHub MCP read-only example:
+
+```env
+GITHUB_MCP_TOKEN=...
+YOLORAG_MCP_SERVERS=[{"name":"github","type":"http","url":"https://api.githubcopilot.com/mcp/","allowed_repositories":["ultralytics/ultralytics"],"headers":{"Authorization":"Bearer ${GITHUB_MCP_TOKEN}","X-MCP-Toolsets":"repos,issues,pull_requests,actions","X-MCP-Readonly":"true"}}]
+```
+
+`X-MCP-Readonly` keeps GitHub tool calls read-only, while `X-MCP-Toolsets`
+narrows the exposed tools to the issue-troubleshooting surface.
+`allowed_repositories` is enforced locally before tool calls leave the app, so
+the agent can only use GitHub MCP against the listed repositories.
 
 ## Run The Frontend
 
@@ -48,7 +69,7 @@ npm run sync:llm
 npm run dev
 ```
 
-By default, Vite proxies `/api/*` to `http://127.0.0.1:8000`, so the widget can call `/api/chat` while the FastAPI server uses the real configured provider.
+By default, Vite proxies `/api/*` to `http://127.0.0.1:8000`, so the widget can call `/api/chat/fast` while the FastAPI server uses the real configured provider.
 
 Use a real provider for local chat testing:
 
@@ -83,6 +104,18 @@ YOLORAG_DEEPSEEK_THINKING_MODEL=deepseek-v4-pro
 ```
 
 DeepSeek fast mode explicitly disables thinking. DeepSeek deep mode enables thinking with high reasoning effort.
+
+## Retrieval Tuning
+
+Fast chat uses a small retrieval pass and injects context only when the returned
+result clears the configured relevance threshold. Deep chat applies the same
+threshold to the `docs_search` tool results. This avoids hard-coded keyword
+routing while keeping retrieved context quality-gated.
+
+```env
+YOLORAG_CHAT_VECTOR_TOP_K=2
+YOLORAG_RETRIEVAL_MIN_SCORE=0.50
+```
 
 ## Test
 
