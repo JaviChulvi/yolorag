@@ -1,17 +1,590 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+
 import LLMWidget from "./components/LLMWidget.jsx";
+import { streamDeepAgentChat } from "./lib/chatApi.js";
 import { config } from "./lib/config.js";
 
+const STORAGE_KEY = "yolorag.deepAgentConversations.v1";
+const AGENT_INSTRUCTIONS =
+  "You are the YoloRAG deep agent inside the local Ultralytics testing console. Use tools when they materially improve the answer and keep responses direct.";
+const STARTER_MESSAGES = [
+  "Trace the deep route for a YOLO export question",
+  "Find the docs path for training a custom dataset",
+  "Check what the agent would inspect for a GitHub issue",
+];
+
 export default function App() {
+  const initialConversations = useRef(null);
+  if (initialConversations.current === null) {
+    initialConversations.current = loadConversations();
+  }
+
+  const [conversations, setConversations] = useState(initialConversations.current);
+  const [activeConversationId, setActiveConversationId] = useState(
+    initialConversations.current[0]?.id || null,
+  );
+  const [input, setInput] = useState("");
+  const [now, setNow] = useState(Date.now());
+  const requestRef = useRef(null);
+  const messagesRef = useRef(null);
+  const autoFollowRef = useRef(true);
+
+  const activeConversation = useMemo(
+    () => conversations.find((conversation) => conversation.id === activeConversationId),
+    [activeConversationId, conversations],
+  );
+  const sortedConversations = useMemo(
+    () => [...conversations].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt)),
+    [conversations],
+  );
+  const activeAssistant = activeConversation?.messages.find(
+    (message) => message.role === "assistant" && message.status === "working",
+  );
+  const isWorking = Boolean(activeAssistant);
+
+  useEffect(() => {
+    saveConversations(conversations);
+  }, [conversations]);
+
+  useEffect(() => {
+    if (!activeConversationId && conversations[0]) {
+      setActiveConversationId(conversations[0].id);
+    }
+  }, [activeConversationId, conversations]);
+
+  useEffect(() => {
+    if (!isWorking) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 400);
+    return () => window.clearInterval(interval);
+  }, [isWorking]);
+
+  useEffect(() => {
+    autoFollowRef.current = true;
+    window.requestAnimationFrame(() => scrollMessagesToBottom("auto"));
+  }, [activeConversationId]);
+
+  useEffect(() => {
+    if (!autoFollowRef.current) return;
+    window.requestAnimationFrame(() => scrollMessagesToBottom(isWorking ? "auto" : "smooth"));
+  }, [activeConversation?.updatedAt, activeConversation?.messages.length, isWorking]);
+
+  async function handleSubmit(event) {
+    event.preventDefault();
+    const content = input.trim();
+    if (!content || !activeConversation || isWorking) return;
+
+    const startedAt = new Date().toISOString();
+    const userMessage = createMessage("user", content, startedAt);
+    const assistantMessage = {
+      ...createMessage("assistant", "", startedAt),
+      startedAt,
+      status: "working",
+      phase: "Starting deep agent",
+      events: [],
+    };
+    const nextTitle =
+      activeConversation.messages.length === 0 ? titleFromMessage(content) : activeConversation.title;
+    const requestMessages = [...activeConversation.messages, userMessage]
+      .filter((message) => message.content.trim())
+      .map(({ role, content: messageContent }) => ({ role, content: messageContent }));
+
+    autoFollowRef.current = true;
+    setInput("");
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? {
+              ...conversation,
+              title: nextTitle,
+              messages: [...conversation.messages, userMessage, assistantMessage],
+              updatedAt: startedAt,
+            }
+          : conversation,
+      ),
+    );
+
+    const controller = new AbortController();
+    requestRef.current = controller;
+    let sawDone = false;
+    const localStart = Date.now();
+
+    try {
+      const result = await streamDeepAgentChat({
+        messages: requestMessages,
+        sessionId: activeConversation.sessionId,
+        instructions: AGENT_INSTRUCTIONS,
+        signal: controller.signal,
+        onEvent: (agentEvent) => {
+          if (agentEvent.type === "done") sawDone = true;
+          applyAgentEvent(activeConversation.id, assistantMessage.id, agentEvent, localStart);
+        },
+      });
+
+      setConversations((current) =>
+        current.map((conversation) =>
+          conversation.id === activeConversation.id
+            ? {
+                ...conversation,
+                sessionId: result.sessionId || conversation.sessionId,
+              }
+            : conversation,
+        ),
+      );
+
+      if (!sawDone) {
+        finishAssistant(activeConversation.id, assistantMessage.id, {
+          durationMs: Date.now() - localStart,
+          status: "done",
+        });
+      }
+    } catch (error) {
+      const aborted = error.name === "AbortError";
+      finishAssistant(activeConversation.id, assistantMessage.id, {
+        durationMs: Date.now() - localStart,
+        status: aborted ? "stopped" : "error",
+        phase: aborted ? "Stopped" : "Request failed",
+        fallbackContent: aborted ? "Stopped before the agent finished." : error.message,
+      });
+    } finally {
+      requestRef.current = null;
+    }
+  }
+
+  function applyAgentEvent(conversationId, messageId, agentEvent, localStart) {
+    setConversations((current) =>
+      current.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          messages: conversation.messages.map((message) =>
+            message.id === messageId
+              ? reduceAssistantMessage(message, agentEvent, localStart)
+              : message,
+          ),
+        };
+      }),
+    );
+  }
+
+  function finishAssistant(conversationId, messageId, patch) {
+    setConversations((current) =>
+      current.map((conversation) => {
+        if (conversation.id !== conversationId) return conversation;
+        return {
+          ...conversation,
+          updatedAt: new Date().toISOString(),
+          messages: conversation.messages.map((message) => {
+            if (message.id !== messageId) return message;
+            return {
+              ...message,
+              content: message.content || patch.fallbackContent || "",
+              status: patch.status,
+              phase: patch.phase || message.phase,
+              completedAt: new Date().toISOString(),
+              durationMs: patch.durationMs,
+            };
+          }),
+        };
+      }),
+    );
+  }
+
+  function handleNewChat() {
+    const conversation = createConversation();
+    setConversations((current) => [conversation, ...current]);
+    setActiveConversationId(conversation.id);
+    setInput("");
+  }
+
+  function handleStop() {
+    requestRef.current?.abort();
+  }
+
+  function handleMessagesScroll() {
+    const container = messagesRef.current;
+    if (!container) return;
+
+    const distanceFromBottom =
+      container.scrollHeight - container.scrollTop - container.clientHeight;
+    const nextIsAtBottom = distanceFromBottom < 96;
+    autoFollowRef.current = nextIsAtBottom;
+  }
+
+  function scrollMessagesToBottom(behavior = "smooth") {
+    const container = messagesRef.current;
+    if (!container) return;
+    container.scrollTo({
+      top: container.scrollHeight,
+      behavior,
+    });
+  }
+
+  function handleKeyDown(event) {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      event.currentTarget.form?.requestSubmit();
+    }
+  }
+
   return (
-    <main className="min-h-screen bg-white px-6 py-10 text-neutral-950">
-      <section className="mx-auto max-w-3xl">
-        <p className="text-sm font-semibold uppercase tracking-widest text-neutral-500">YoloRAG</p>
-        <h1 className="mt-4 text-4xl font-semibold tracking-tight md:text-6xl">LLM widget test page</h1>
-        <p className="mt-6 text-base leading-7 text-neutral-600">
-          API endpoint: <code className="rounded bg-neutral-100 px-2 py-1">{config.chatApiUrl}</code>
-        </p>
-        <LLMWidget />
+    <main className="console-shell">
+      <aside className="sidebar">
+        <div className="brand-block">
+          <div className="brand-mark">YO</div>
+          <div>
+            <p className="brand-kicker">Console</p>
+            <h1>YoloRAG</h1>
+          </div>
+        </div>
+
+        <button className="new-chat-button" type="button" onClick={handleNewChat}>
+          <span aria-hidden="true">+</span>
+          New chat
+        </button>
+
+        <nav className="conversation-list" aria-label="Conversations">
+          {sortedConversations.map((conversation) => (
+            <button
+              className={`conversation-item ${
+                conversation.id === activeConversationId ? "is-active" : ""
+              }`}
+              key={conversation.id}
+              type="button"
+              onClick={() => setActiveConversationId(conversation.id)}
+            >
+              <span className="conversation-title">{conversation.title}</span>
+              <span className="conversation-meta">
+                {conversation.messages.length
+                  ? lastMessagePreview(conversation.messages)
+                  : "Empty thread"}
+              </span>
+              <time dateTime={conversation.updatedAt}>{formatShortTime(conversation.updatedAt)}</time>
+            </button>
+          ))}
+        </nav>
+
+        <div className="fast-widget-status">
+          <span>Fast chat</span>
+          <LLMWidget />
+        </div>
+      </aside>
+
+      <section className="chat-panel">
+        <header className="chat-header">
+          <div>
+            <p className="route-label">Ultralytics / YoloRAG</p>
+            <h2>{activeConversation?.title || "New deep agent chat"}</h2>
+          </div>
+          <div className="header-actions">
+            <div className="route-pill">Deep agent events</div>
+            <div className="route-pill muted">{config.deepAgentEventsApiUrl}</div>
+          </div>
+        </header>
+
+        {activeAssistant ? (
+          <AgentRunStatus message={activeAssistant} now={now} onStop={handleStop} />
+        ) : null}
+
+        <section
+          className="messages"
+          ref={messagesRef}
+          aria-live="polite"
+          onScroll={handleMessagesScroll}
+        >
+          {activeConversation?.messages.length ? (
+            activeConversation.messages.map((message) => (
+              <MessageRow key={message.id} message={message} now={now} />
+            ))
+          ) : (
+            <div className="empty-state">
+              <div className="empty-mark">YO</div>
+              <div className="starter-grid">
+                {STARTER_MESSAGES.map((starter) => (
+                  <button
+                    className="starter"
+                    key={starter}
+                    type="button"
+                    onClick={() => setInput(starter)}
+                  >
+                    {starter}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+          <div />
+        </section>
+
+        <form className="composer" onSubmit={handleSubmit}>
+          <textarea
+            aria-label="Message"
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask the deep agent"
+            rows={1}
+            value={input}
+          />
+          {isWorking ? (
+            <button
+              aria-label="Stop response"
+              className="composer-action stop"
+              onClick={handleStop}
+              title="Stop response"
+              type="button"
+            >
+              <span aria-hidden="true">■</span>
+            </button>
+          ) : (
+            <button
+              aria-label="Send message"
+              className="composer-action"
+              disabled={!input.trim()}
+              title="Send message"
+              type="submit"
+            >
+              <span aria-hidden="true">↑</span>
+            </button>
+          )}
+        </form>
       </section>
     </main>
   );
+}
+
+function AgentRunStatus({ message, now, onStop }) {
+  const duration = message.startedAt ? now - Date.parse(message.startedAt) : 0;
+  const latestEvent = message.events?.at(-1)?.label || message.phase || "Starting deep agent";
+
+  return (
+    <div className="run-status" role="status" aria-live="polite">
+      <div className="run-status-orbit" aria-hidden="true">
+        <span />
+      </div>
+      <div className="run-status-copy">
+        <span>Agent is working</span>
+        <strong>{latestEvent}</strong>
+      </div>
+      <time>{formatDuration(duration)}</time>
+      <button type="button" onClick={onStop}>
+        Stop
+      </button>
+    </div>
+  );
+}
+
+function MessageRow({ message, now }) {
+  const isAssistant = message.role === "assistant";
+  const isWorkingMessage = message.status === "working";
+  const duration =
+    isAssistant && message.startedAt
+      ? message.durationMs || (message.status === "working" ? now - Date.parse(message.startedAt) : null)
+      : null;
+
+  return (
+    <article className={`message-row ${isAssistant ? "assistant" : "user"} ${message.status || ""}`}>
+      <div className="message-avatar">{isAssistant ? "YO" : "You"}</div>
+      <div className="message-body">
+        <div className="message-meta">
+          <span>{isAssistant ? "YoloRAG" : "You"}</span>
+          <time dateTime={message.createdAt}>{formatMessageTime(message.createdAt)}</time>
+          {duration !== null ? <span>{agentDurationLabel(message.status, duration)}</span> : null}
+        </div>
+        {isAssistant && message.events?.length ? <AgentTimeline events={message.events} /> : null}
+        <div
+          className={`message-content ${message.status === "error" ? "is-error" : ""}`}
+          aria-busy={isWorkingMessage}
+        >
+          {message.content ? (
+            message.content
+          ) : isWorkingMessage ? (
+            <WorkingMessage phase={message.phase} />
+          ) : (
+            ""
+          )}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function WorkingMessage({ phase }) {
+  return (
+    <div className="working-message">
+      <span className="working-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      <span>{phase || "Working"}</span>
+    </div>
+  );
+}
+
+function AgentTimeline({ events }) {
+  return (
+    <ol className="agent-timeline" aria-label="Agent events">
+      {events.slice(-5).map((event) => (
+        <li className={event.type} key={event.id}>
+          <span>{event.label}</span>
+          <time dateTime={event.createdAt}>{formatShortTime(event.createdAt)}</time>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
+function reduceAssistantMessage(message, event, localStart) {
+  const timestamp = new Date().toISOString();
+
+  if (event.type === "content") {
+    return {
+      ...message,
+      content: `${message.content}${event.content || ""}`,
+      phase: "Responding",
+    };
+  }
+
+  if (event.type === "done") {
+    return {
+      ...message,
+      status: "done",
+      phase: "Complete",
+      completedAt: timestamp,
+      durationMs: Number.isFinite(event.latency_ms) ? event.latency_ms : Date.now() - localStart,
+      stepCount: event.step_count,
+      toolCallCount: event.tool_call_count,
+      events: appendTimelineEvent(message.events, event, timestamp),
+    };
+  }
+
+  if (event.type === "error") {
+    return {
+      ...message,
+      content: message.content || event.error || "The agent request failed.",
+      status: "error",
+      phase: "Request failed",
+      completedAt: timestamp,
+      durationMs: Date.now() - localStart,
+      events: appendTimelineEvent(message.events, event, timestamp),
+    };
+  }
+
+  return {
+    ...message,
+    phase: event.message || event.type || message.phase,
+    events: appendTimelineEvent(message.events, event, timestamp),
+  };
+}
+
+function appendTimelineEvent(events = [], event, createdAt) {
+  const label = timelineLabel(event);
+  if (!label) return events;
+  return [
+    ...events,
+    {
+      id: createId(),
+      type: event.type || "status",
+      label,
+      createdAt,
+    },
+  ];
+}
+
+function timelineLabel(event) {
+  if (event.type === "status") return event.message || "Working";
+  if (event.type === "tool_call") return `Calling ${event.tool || "tool"}`;
+  if (event.type === "tool_result") {
+    const suffix = event.error || event.summary || "completed";
+    return `${event.tool || "tool"}: ${suffix}`;
+  }
+  if (event.type === "done") {
+    const count = Number(event.tool_call_count || 0);
+    return count === 1 ? "Finished with 1 tool call" : `Finished with ${count} tool calls`;
+  }
+  if (event.type === "error") return event.error || "Request failed";
+  return null;
+}
+
+function createConversation() {
+  const now = new Date().toISOString();
+  return {
+    id: createId(),
+    title: "New deep agent chat",
+    sessionId: null,
+    updatedAt: now,
+    messages: [],
+  };
+}
+
+function createMessage(role, content, createdAt = new Date().toISOString()) {
+  return {
+    id: createId(),
+    role,
+    content,
+    createdAt,
+  };
+}
+
+function loadConversations() {
+  try {
+    const saved = JSON.parse(window.localStorage.getItem(STORAGE_KEY) || "[]");
+    if (Array.isArray(saved) && saved.length) return saved;
+  } catch {
+    window.localStorage.removeItem(STORAGE_KEY);
+  }
+  return [createConversation()];
+}
+
+function saveConversations(conversations) {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations.slice(0, 24)));
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function createId() {
+  return window.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function titleFromMessage(message) {
+  const clean = message.replace(/\s+/g, " ").trim();
+  return clean.length > 52 ? `${clean.slice(0, 49)}...` : clean;
+}
+
+function lastMessagePreview(messages) {
+  const last = [...messages].reverse().find((message) => message.content.trim());
+  if (!last) return "Working";
+  const content = last.content.replace(/\s+/g, " ").trim();
+  return content.length > 42 ? `${content.slice(0, 39)}...` : content;
+}
+
+function formatShortTime(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatMessageTime(value) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatDuration(ms) {
+  if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
+  return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+}
+
+function agentDurationLabel(status, duration) {
+  if (status === "working") return `Working ${formatDuration(duration)}`;
+  if (status === "stopped") return `Stopped after ${formatDuration(duration)}`;
+  if (status === "error") return `Failed after ${formatDuration(duration)}`;
+  return `Agent worked ${formatDuration(duration)}`;
 }
