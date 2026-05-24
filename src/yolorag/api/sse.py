@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator
+from typing import Any
 
 
 async def text_event_stream(text: str, chunk_size: int = 80) -> AsyncIterator[str]:
@@ -24,12 +25,31 @@ async def content_event_stream(
     yield "data: [DONE]\n\n"
 
 
+async def typed_event_stream(
+    events: AsyncIterator[dict[str, Any]],
+    error_prefix: str = "Stream failed",
+) -> AsyncIterator[str]:
+    try:
+        async for event in events:
+            yield data_event(event)
+    except Exception as exc:
+        async for event in typed_error_event_stream(f"{error_prefix}: {exc}"):
+            yield event
+        return
+    yield "data: [DONE]\n\n"
+
+
 async def error_event_stream(message: str) -> AsyncIterator[str]:
     yield data_event({"error": message})
     yield "data: [DONE]\n\n"
 
 
-def data_event(payload: dict[str, str]) -> str:
+async def typed_error_event_stream(message: str) -> AsyncIterator[str]:
+    yield data_event({"type": "error", "error": message})
+    yield "data: [DONE]\n\n"
+
+
+def data_event(payload: dict[str, Any]) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
 

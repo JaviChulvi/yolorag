@@ -13,6 +13,7 @@ EXPOSED_WIDGET_HEADERS = [
     "X-Total-User-Messages",
     "X-Active-User-Messages",
     "X-Chat-Mode",
+    "X-Stream-Format",
 ]
 
 

@@ -8,7 +8,12 @@ from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
 from yolorag.api.schemas import ChatRequest
-from yolorag.api.sse import content_event_stream, error_event_stream
+from yolorag.api.sse import (
+    content_event_stream,
+    error_event_stream,
+    typed_error_event_stream,
+    typed_event_stream,
+)
 from yolorag.runtime import (
     YoloRAGAgentRuntime,
     YoloRAGRuntime,
@@ -101,6 +106,47 @@ async def chat_deep(payload: ChatRequest, request: Request) -> StreamingResponse
             "X-Total-User-Messages": str(total_messages),
             "X-Active-User-Messages": str(active_messages),
             "X-Chat-Mode": "deep",
+        },
+    )
+
+
+@router.post("/chat/deep/events")
+async def chat_deep_events(payload: ChatRequest, request: Request) -> StreamingResponse:
+    user_message = payload.latest_user_message()
+    if user_message is None:
+        raise HTTPException(status_code=400, detail="At least one user message is required.")
+
+    session_id = payload.session_id or str(uuid4())
+    request_id = str(uuid4())
+    total_messages, active_messages = _message_counts(payload)
+
+    try:
+        runtime = _deep_runtime(request)
+        composed_user_message = _compose_user_message(payload, user_message.content)
+        stream = typed_event_stream(
+            runtime.stream_answer(
+                user_message=composed_user_message,
+                conversation_id=session_id,
+                conversation_messages=_model_messages(payload, composed_user_message),
+                raw_user_message=user_message.content,
+                request_id=request_id,
+                user_message_index=_latest_user_message_index(payload),
+            ),
+            error_prefix="Deep chat generation failed",
+        )
+    except Exception as exc:
+        stream = typed_error_event_stream(f"Deep chat generation failed: {exc}")
+
+    return StreamingResponse(
+        stream,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Session-ID": session_id,
+            "X-Total-User-Messages": str(total_messages),
+            "X-Active-User-Messages": str(active_messages),
+            "X-Chat-Mode": "deep",
+            "X-Stream-Format": "agent-events",
         },
     )
 

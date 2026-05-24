@@ -23,7 +23,9 @@ python -m pip install -e .
 The FastAPI app exposes the `../llm` widget chat contract at `POST /api/chat/fast`.
 `POST /api/chat` remains as a legacy alias for the fast route. Deep agent mode is
 available at `POST /api/chat/deep` and returns only the final text response after
-the agent finishes any docs or MCP tool calls.
+the agent finishes any docs or MCP tool calls. `POST /api/chat/deep/events`
+streams the same deep-agent run as Server-Sent Events, including `status`,
+`tool_call`, `tool_result`, `content`, and `done` payloads for the local console.
 
 ```bash
 PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000

@@ -224,6 +224,41 @@ class ChatApiTests(unittest.TestCase):
         self.assertTrue(provider.requests[0].tools)
         self.assertEqual(provider.requests[1].messages[-1]["role"], "tool")
 
+    def test_deep_chat_events_stream_typed_agent_events(self) -> None:
+        provider = ToolCallingProvider()
+        deep_runtime = YoloRAGAgentRuntime(
+            orchestrator=DeepAgentOrchestrator(
+                provider=provider,
+                model="deep-model",
+                tool_router=ToolRouter(tools=[FakeDocsTool()]),
+                max_steps=3,
+            )
+        )
+        client = TestClient(create_app(deep_runtime=deep_runtime))
+
+        response = client.post(
+            "/api/chat/deep/events",
+            json={"messages": [{"role": "user", "content": "how do I export?"}]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("text/event-stream", response.headers["content-type"])
+        self.assertEqual(response.headers["X-Chat-Mode"], "deep")
+        self.assertEqual(response.headers["X-Stream-Format"], "agent-events")
+        self.assertIn('"type": "status"', response.text)
+        self.assertIn('"message": "Starting deep agent"', response.text)
+        self.assertIn('"type": "tool_call"', response.text)
+        self.assertIn('"tool": "docs_search"', response.text)
+        self.assertIn('"type": "tool_result"', response.text)
+        self.assertIn('"summary": "1 result(s)"', response.text)
+        self.assertIn('"type": "content"', response.text)
+        self.assertIn('"content": "Use yolo export."', response.text)
+        self.assertIn('"type": "done"', response.text)
+        self.assertIn('"tool_call_count": 1', response.text)
+        self.assertIn('"latency_ms":', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertEqual(provider.complete_calls, 2)
+
 
 class StaticRetriever:
     def __init__(self, score: float = 0.9) -> None:
