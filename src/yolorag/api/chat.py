@@ -51,6 +51,8 @@ async def chat_fast(payload: ChatRequest, request: Request) -> StreamingResponse
                 raw_user_message=user_message.content,
                 request_id=request_id,
                 user_message_index=_latest_user_message_index(payload),
+                include_metrics=payload.include_metrics,
+                persist=payload.analytics,
             ),
             error_prefix="Chat generation failed",
         )

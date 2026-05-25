@@ -4,6 +4,7 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 from yolorag.core.conversation import ConversationLogger
 from yolorag.core.routing import SimpleRoutePlanner
@@ -15,6 +16,7 @@ from yolorag.core.transcripts import (
 )
 from yolorag.providers.base import LLMProvider, LLMRequest, Message, ResponseMode
 from yolorag.retrieval.base import RetrievalResult, Retriever
+from yolorag.usage.models import CostBreakdown, TokenUsage
 
 
 MAIN_SYSTEM_PROMPT = """\
@@ -70,16 +72,19 @@ class RAGOrchestrator:
         raw_user_message: str | None = None,
         request_id: str | None = None,
         user_message_index: int | None = None,
+        measure_ttft: bool = False,
+        persist: bool = True,
     ) -> OrchestratorResult:
         total_started = time.perf_counter()
         retrieval_query = raw_user_message or user_message
         plan = self.route_planner.plan(user_message=retrieval_query, requested_mode=mode)
-        self._schedule_user_message_write(
-            conversation_id=conversation_id,
-            request_id=request_id,
-            raw_user_message=raw_user_message or user_message,
-            user_message_index=user_message_index,
-        )
+        if persist:
+            self._schedule_user_message_write(
+                conversation_id=conversation_id,
+                request_id=request_id,
+                raw_user_message=raw_user_message or user_message,
+                user_message_index=user_message_index,
+            )
         retrieval_started = time.perf_counter()
         retrieved_context, retrieval_error = await self._retrieve_if_needed(
             user_message=retrieval_query,
@@ -96,12 +101,14 @@ class RAGOrchestrator:
             retrieved_context=retrieved_context,
         )
 
+        pre_llm_ms = _elapsed_ms(total_started)
         response = await self.provider.complete(
             LLMRequest(
                 messages=messages,
                 model=self.model,
                 mode=plan.mode,
                 max_tokens=512 if plan.mode == "fast" else 1600,
+                metadata={"stream_for_timing": measure_ttft},
             )
         )
 
@@ -109,18 +116,21 @@ class RAGOrchestrator:
         retrieved_ids = [item.document.id for item in retrieved_context]
         retrieval_trace = retrieved_context[0].trace if retrieved_context else None
         llm_ms = response.latency_ms
+        llm_ttft_ms = response.first_token_latency_ms
+        ttft_ms = pre_llm_ms + llm_ttft_ms if llm_ttft_ms else 0
         total_ms = max(_elapsed_ms(total_started), retrieval_ms + llm_ms)
         orchestration_overhead_ms = max(total_ms - retrieval_ms - llm_ms, 0)
 
-        self._schedule_assistant_message_write(
-            conversation_id=conversation_id,
-            request_id=request_id,
-            assistant_message=answer,
-            user_message_index=user_message_index,
-            retrieved_document_ids=retrieved_ids,
-            provider=response.provider,
-            model=response.model,
-        )
+        if persist:
+            self._schedule_assistant_message_write(
+                conversation_id=conversation_id,
+                request_id=request_id,
+                assistant_message=answer,
+                user_message_index=user_message_index,
+                retrieved_document_ids=retrieved_ids,
+                provider=response.provider,
+                model=response.model,
+            )
 
         trace = OrchestrationTrace(
             provider=response.provider,
@@ -136,9 +146,12 @@ class RAGOrchestrator:
             route_reason=plan.reason,
             total_ms=total_ms,
             retrieval_ms=retrieval_ms,
+            query_embedding_ms=retrieval_trace.query_embedding_ms if retrieval_trace else 0,
             vector_search_ms=retrieval_trace.vector_search_ms if retrieval_trace else 0,
             rerank_ms=retrieval_trace.rerank_ms if retrieval_trace else 0,
             llm_ms=llm_ms,
+            ttft_ms=ttft_ms,
+            llm_ttft_ms=llm_ttft_ms,
             orchestration_overhead_ms=orchestration_overhead_ms,
             retrieval_candidate_count=retrieval_trace.candidate_count if retrieval_trace else 0,
             retrieval_returned_count=retrieval_trace.returned_count if retrieval_trace else 0,
@@ -161,15 +174,20 @@ class RAGOrchestrator:
         raw_user_message: str | None = None,
         request_id: str | None = None,
         user_message_index: int | None = None,
-    ) -> AsyncIterator[str]:
+        include_metrics: bool = False,
+        persist: bool = True,
+    ) -> AsyncIterator[str | dict[str, Any]]:
+        total_started = time.perf_counter()
         retrieval_query = raw_user_message or user_message
         plan = self.route_planner.plan(user_message=retrieval_query, requested_mode=mode)
-        self._schedule_user_message_write(
-            conversation_id=conversation_id,
-            request_id=request_id,
-            raw_user_message=raw_user_message or user_message,
-            user_message_index=user_message_index,
-        )
+        if persist:
+            self._schedule_user_message_write(
+                conversation_id=conversation_id,
+                request_id=request_id,
+                raw_user_message=raw_user_message or user_message,
+                user_message_index=user_message_index,
+            )
+        retrieval_started = time.perf_counter()
         retrieved_context, _retrieval_error = await self._retrieve_if_needed(
             user_message=retrieval_query,
             existing_document_ids=set(),
@@ -177,6 +195,8 @@ class RAGOrchestrator:
             top_k=self.retrieval_top_k or plan.top_k,
             min_relevance_score=plan.min_relevance_score,
         )
+        retrieval_ms = _elapsed_ms(retrieval_started)
+        retrieval_trace = retrieved_context[0].trace if retrieved_context else None
 
         messages = self._request_messages(
             user_message=user_message,
@@ -185,6 +205,11 @@ class RAGOrchestrator:
         )
 
         chunks = []
+        usage = TokenUsage()
+        cost = CostBreakdown()
+        llm_started = time.perf_counter()
+        llm_ttft_ms = 0
+        ttft_ms = 0
         async for event in self.provider.stream_complete(
             LLMRequest(
                 messages=messages,
@@ -193,25 +218,67 @@ class RAGOrchestrator:
                 max_tokens=512 if plan.mode == "fast" else 1600,
             )
         ):
+            if event.usage is not None:
+                usage = event.usage
+            if event.cost is not None:
+                cost = event.cost
             if not event.content:
                 continue
+            if not llm_ttft_ms:
+                llm_ttft_ms = _elapsed_ms(llm_started)
+                ttft_ms = _elapsed_ms(total_started)
             chunks.append(event.content)
             yield event.content
 
+        llm_ms = _elapsed_ms(llm_started)
         answer = "".join(chunks)
         source_suffix = self._source_suffix(answer, retrieved_context)
         if source_suffix:
+            if not ttft_ms:
+                ttft_ms = _elapsed_ms(total_started)
             yield source_suffix
         final_answer = f"{answer.rstrip()}{source_suffix}" if source_suffix else answer
-        self._schedule_assistant_message_write(
-            conversation_id=conversation_id,
-            request_id=request_id,
-            assistant_message=final_answer,
-            user_message_index=user_message_index,
-            retrieved_document_ids=[item.document.id for item in retrieved_context],
+        retrieved_ids = [item.document.id for item in retrieved_context]
+        if persist:
+            self._schedule_assistant_message_write(
+                conversation_id=conversation_id,
+                request_id=request_id,
+                assistant_message=final_answer,
+                user_message_index=user_message_index,
+                retrieved_document_ids=retrieved_ids,
+                provider=self.provider.provider_name,
+                model=self.model,
+            )
+
+        total_ms = max(_elapsed_ms(total_started), retrieval_ms + llm_ms)
+        trace = OrchestrationTrace(
             provider=self.provider.provider_name,
             model=self.model,
+            mode=plan.mode,
+            retrieval_used=bool(retrieved_context),
+            retrieved_document_ids=retrieved_ids,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+            estimated_cost_usd=cost.total_usd,
+            pricing_source=cost.pricing_source,
+            latency_ms=llm_ms,
+            route_reason=plan.reason,
+            total_ms=total_ms,
+            retrieval_ms=retrieval_ms,
+            query_embedding_ms=retrieval_trace.query_embedding_ms if retrieval_trace else 0,
+            vector_search_ms=retrieval_trace.vector_search_ms if retrieval_trace else 0,
+            rerank_ms=retrieval_trace.rerank_ms if retrieval_trace else 0,
+            llm_ms=llm_ms,
+            ttft_ms=ttft_ms,
+            llm_ttft_ms=llm_ttft_ms,
+            orchestration_overhead_ms=max(total_ms - retrieval_ms - llm_ms, 0),
+            retrieval_candidate_count=retrieval_trace.candidate_count if retrieval_trace else 0,
+            retrieval_returned_count=retrieval_trace.returned_count if retrieval_trace else 0,
+            retrieval_reranked=retrieval_trace.reranked if retrieval_trace else False,
+            retrieval_error=_retrieval_error,
         )
+        if include_metrics:
+            yield {"type": "metrics", "metrics": _metrics_payload(trace)}
 
     async def _retrieve_if_needed(
         self,
@@ -372,6 +439,41 @@ def _passes_relevance_threshold(
     if min_relevance_score is None:
         return True
     return result.score >= min_relevance_score
+
+
+def _metrics_payload(trace: OrchestrationTrace) -> dict[str, Any]:
+    return {
+        "provider": trace.provider,
+        "model": trace.model,
+        "mode": trace.mode,
+        "timings_ms": {
+            "total": trace.total_ms,
+            "retrieval": trace.retrieval_ms,
+            "query_embedding": trace.query_embedding_ms,
+            "vector_search": trace.vector_search_ms,
+            "rerank": trace.rerank_ms,
+            "llm": trace.llm_ms,
+            "ttft": trace.ttft_ms,
+            "llm_ttft": trace.llm_ttft_ms,
+            "orchestration_overhead": trace.orchestration_overhead_ms,
+            "wall": trace.total_ms,
+        },
+        "retrieval": {
+            "used": trace.retrieval_used,
+            "reranked": trace.retrieval_reranked,
+            "candidate_count": trace.retrieval_candidate_count,
+            "returned_count": trace.retrieval_returned_count,
+            "document_ids": trace.retrieved_document_ids,
+            "error": trace.retrieval_error,
+        },
+        "usage": {
+            "input_tokens": trace.input_tokens,
+            "output_tokens": trace.output_tokens,
+            "estimated_cost_usd": float(trace.estimated_cost_usd),
+            "pricing_source": trace.pricing_source,
+        },
+        "route_reason": trace.route_reason,
+    }
 
 
 def _last_user_message_index(messages: list[Message]) -> int | None:

@@ -12,12 +12,15 @@ async def text_event_stream(text: str, chunk_size: int = 80) -> AsyncIterator[st
 
 
 async def content_event_stream(
-    chunks: AsyncIterator[str],
+    chunks: AsyncIterator[str | dict[str, Any]],
     error_prefix: str = "Stream failed",
 ) -> AsyncIterator[str]:
     try:
         async for chunk in chunks:
-            yield data_event({"content": chunk})
+            if isinstance(chunk, dict):
+                yield data_event(chunk)
+            else:
+                yield data_event({"content": chunk})
     except Exception as exc:
         async for event in error_event_stream(f"{error_prefix}: {exc}"):
             yield event

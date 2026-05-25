@@ -139,7 +139,7 @@ class ProviderRequestOptionTests(unittest.TestCase):
         self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
         self.assertNotIn("reasoning_effort", kwargs)
 
-    def test_deepseek_streaming_keeps_openai_compat_kwargs_minimal(self) -> None:
+    def test_deepseek_streaming_requests_usage_in_final_chunk(self) -> None:
         provider = DeepSeekProvider(api_key="test-key")
         kwargs = provider._stream_completion_kwargs(
             LLMRequest(
@@ -150,7 +150,7 @@ class ProviderRequestOptionTests(unittest.TestCase):
         )
 
         self.assertTrue(kwargs["stream"])
-        self.assertNotIn("stream_options", kwargs)
+        self.assertEqual(kwargs["stream_options"], {"include_usage": True})
         self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "disabled"}})
 
     def test_deepseek_deep_enables_high_effort_thinking(self) -> None:

@@ -39,6 +39,8 @@ class YoloRAGRuntime:
         raw_user_message: str | None = None,
         request_id: str | None = None,
         user_message_index: int | None = None,
+        measure_ttft: bool = False,
+        persist: bool = True,
     ) -> OrchestratorResult:
         return await self.orchestrator.answer(
             user_message=user_message,
@@ -48,6 +50,8 @@ class YoloRAGRuntime:
             raw_user_message=raw_user_message,
             request_id=request_id,
             user_message_index=user_message_index,
+            measure_ttft=measure_ttft,
+            persist=persist,
         )
 
     def stream_answer(
@@ -59,7 +63,9 @@ class YoloRAGRuntime:
         raw_user_message: str | None = None,
         request_id: str | None = None,
         user_message_index: int | None = None,
-    ) -> AsyncIterator[str]:
+        include_metrics: bool = False,
+        persist: bool = True,
+    ) -> AsyncIterator[str | dict[str, Any]]:
         return self.orchestrator.stream_answer(
             user_message=user_message,
             conversation_id=conversation_id,
@@ -68,6 +74,8 @@ class YoloRAGRuntime:
             raw_user_message=raw_user_message,
             request_id=request_id,
             user_message_index=user_message_index,
+            include_metrics=include_metrics,
+            persist=persist,
         )
 
 

@@ -107,6 +107,7 @@ async def _run_full_rag(args: argparse.Namespace, cases: list[dict[str, Any]]) -
         result = await runtime.answer(
             user_message=case["question"],
             conversation_id=f"{run_id}-{case['id']}",
+            measure_ttft=True,
         )
         source_paths = _source_paths(result.retrieved_context)
         row = {
@@ -191,6 +192,8 @@ def _retrieval_only_trace(trace: Any) -> dict[str, Any]:
             "vector_search_ms": 0,
             "rerank_ms": 0,
             "llm_ms": 0,
+            "ttft_ms": 0,
+            "llm_ttft_ms": 0,
             "orchestration_overhead_ms": 0,
             "retrieval_candidate_count": 0,
             "retrieval_returned_count": 0,
@@ -204,6 +207,8 @@ def _retrieval_only_trace(trace: Any) -> dict[str, Any]:
         "vector_search_ms": trace.vector_search_ms,
         "rerank_ms": trace.rerank_ms,
         "llm_ms": 0,
+        "ttft_ms": 0,
+        "llm_ttft_ms": 0,
         "orchestration_overhead_ms": 0,
         "retrieval_candidate_count": trace.candidate_count,
         "retrieval_returned_count": trace.returned_count,
@@ -245,6 +250,8 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "vector_search_ms",
         "rerank_ms",
         "llm_ms",
+        "ttft_ms",
+        "llm_ttft_ms",
         "orchestration_overhead_ms",
     ]
     timings = {
@@ -253,7 +260,15 @@ def _summary(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
     total_ms_sum = sum(row["trace"].get("total_ms", 0) for row in rows)
     component_shares = {}
-    for field in timing_fields[1:]:
+    component_fields = [
+        "retrieval_ms",
+        "query_embedding_ms",
+        "vector_search_ms",
+        "rerank_ms",
+        "llm_ms",
+        "orchestration_overhead_ms",
+    ]
+    for field in component_fields:
         component_shares[field] = (
             sum(row["trace"].get(field, 0) for row in rows) / total_ms_sum
             if total_ms_sum
@@ -313,10 +328,16 @@ def _print_summary(report: dict[str, Any]) -> None:
         ("vector_search_ms", "vector db"),
         ("rerank_ms", "rerank"),
         ("llm_ms", "llm"),
+        ("ttft_ms", "ttft"),
+        ("llm_ttft_ms", "llm ttft"),
         ("orchestration_overhead_ms", "app overhead"),
     ]:
         metric = report["summary"]["timings"][field]
-        share = "" if field == "total_ms" else f"{shares.get(field, 0) * 100:.1f}%"
+        share = (
+            f"{shares.get(field, 0) * 100:.1f}%"
+            if field in shares
+            else ""
+        )
         print(
             f"{label} | {metric['avg']} | {metric['p50']} | "
             f"{metric['p95']} | {metric['max']} | {share}"

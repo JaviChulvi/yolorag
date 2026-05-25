@@ -45,6 +45,10 @@ class RecordingProvider:
         user_message = request.messages[-1]["content"]
         yield LLMStreamEvent(content="Echo: ")
         yield LLMStreamEvent(content=user_message)
+        yield LLMStreamEvent(
+            usage=TokenUsage(input_tokens=10, output_tokens=5, total_tokens=15),
+            cost=CostBreakdown(total_usd=Decimal("0.000001"), pricing_source="test"),
+        )
 
 
 class ChatApiTests(unittest.TestCase):
@@ -69,6 +73,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(provider.complete_calls, 0)
         self.assertIn('data: {"content": "Echo: "}', response.text)
         self.assertIn('data: {"content": "hello"}', response.text)
+        self.assertNotIn('"type": "metrics"', response.text)
         self.assertIn("data: [DONE]", response.text)
 
     def test_legacy_chat_route_aliases_fast_chat(self) -> None:
@@ -86,6 +91,32 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers["X-Chat-Mode"], "fast")
         self.assertEqual(provider.stream_calls, 1)
+
+    def test_fast_chat_can_stream_metrics_when_requested(self) -> None:
+        provider = RecordingProvider()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(provider=provider, model="test-model")
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(
+            "/api/chat/fast",
+            json={
+                "messages": [{"role": "user", "content": "hello"}],
+                "include_metrics": True,
+                "analytics": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data: {"content": "Echo: "}', response.text)
+        self.assertIn('"type": "metrics"', response.text)
+        self.assertIn('"provider": "test"', response.text)
+        self.assertIn('"input_tokens": 10', response.text)
+        self.assertIn('"estimated_cost_usd": 1e-06', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertEqual(provider.stream_calls, 1)
+        self.assertEqual(provider.complete_calls, 0)
 
     def test_chat_streams_llm_answer_when_retrieval_fails(self) -> None:
         provider = RecordingProvider()

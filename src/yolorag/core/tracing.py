@@ -21,9 +21,12 @@ class OrchestrationTrace:
     route_reason: str
     total_ms: int = 0
     retrieval_ms: int = 0
+    query_embedding_ms: int = 0
     vector_search_ms: int = 0
     rerank_ms: int = 0
     llm_ms: int = 0
+    ttft_ms: int = 0
+    llm_ttft_ms: int = 0
     orchestration_overhead_ms: int = 0
     retrieval_candidate_count: int = 0
     retrieval_returned_count: int = 0

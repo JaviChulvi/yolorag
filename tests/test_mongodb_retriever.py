@@ -22,8 +22,18 @@ class FakeKnowledgeStore:
     ) -> list[SearchResult]:
         self.calls.append((query, limit, filters))
         return [
-            _search_result("chunk-1", title="Train", score=0.77),
-            _search_result("chunk-2", title="Export", score=0.70),
+            _search_result(
+                "chunk-1",
+                title="Train",
+                score=0.77,
+                query_embedding_ms=123,
+            ),
+            _search_result(
+                "chunk-2",
+                title="Export",
+                score=0.70,
+                query_embedding_ms=456,
+            ),
         ]
 
 
@@ -62,6 +72,7 @@ class MongoVectorRetrieverTests(unittest.TestCase):
         self.assertIn("reranked by MongoDB", results[0].reason)
         self.assertIsNotNone(results[0].trace)
         assert results[0].trace is not None
+        self.assertEqual(results[0].trace.query_embedding_ms, 123)
         self.assertEqual(results[0].trace.candidate_count, 2)
         self.assertEqual(results[0].trace.returned_count, 1)
         self.assertTrue(results[0].trace.reranked)
@@ -87,7 +98,12 @@ class MongoVectorRetrieverTests(unittest.TestCase):
         self.assertFalse(results[0].trace.reranked)
 
 
-def _search_result(chunk_id: str, title: str, score: float) -> SearchResult:
+def _search_result(
+    chunk_id: str,
+    title: str,
+    score: float,
+    query_embedding_ms: int = 0,
+) -> SearchResult:
     return SearchResult(
         record=ChunkRecord(
             record_id=chunk_id,
@@ -109,6 +125,7 @@ def _search_result(chunk_id: str, title: str, score: float) -> SearchResult:
         ),
         score=score,
         provider="fake",
+        query_embedding_ms=query_embedding_ms,
     )
 
 

@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import LLMWidget from "./components/LLMWidget.jsx";
 import { streamDeepAgentChat } from "./lib/chatApi.js";
 import { config } from "./lib/config.js";
+import { runFastEvals } from "./lib/evalApi.js";
 
 const STORAGE_KEY = "yolorag.deepAgentConversations.v1";
 const AGENT_INSTRUCTIONS =
@@ -23,6 +26,7 @@ export default function App() {
   const [activeConversationId, setActiveConversationId] = useState(
     initialConversations.current[0]?.id || null,
   );
+  const [activePage, setActivePage] = useState("chat");
   const [input, setInput] = useState("");
   const [now, setNow] = useState(Date.now());
   const requestRef = useRef(null);
@@ -41,6 +45,23 @@ export default function App() {
     (message) => message.role === "assistant" && message.status === "working",
   );
   const isWorking = Boolean(activeAssistant);
+
+  useEffect(() => {
+    const root = document.documentElement;
+    const previousTheme = root.dataset.theme;
+    root.dataset.theme = "dark";
+    return () => {
+      if (previousTheme) root.dataset.theme = previousTheme;
+      else delete root.dataset.theme;
+    };
+  }, []);
+
+  useEffect(() => {
+    document.documentElement.dataset.yoloragPage = activePage;
+    return () => {
+      delete document.documentElement.dataset.yoloragPage;
+    };
+  }, [activePage]);
 
   useEffect(() => {
     saveConversations(conversations);
@@ -194,6 +215,7 @@ export default function App() {
     const conversation = createConversation();
     setConversations((current) => [conversation, ...current]);
     setActiveConversationId(conversation.id);
+    setActivePage("chat");
     setInput("");
   }
 
@@ -228,7 +250,7 @@ export default function App() {
   }
 
   return (
-    <main className="console-shell">
+    <main className={`console-shell ${activePage === "eval" ? "eval-active" : ""}`}>
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark">YO</div>
@@ -251,7 +273,10 @@ export default function App() {
               }`}
               key={conversation.id}
               type="button"
-              onClick={() => setActiveConversationId(conversation.id)}
+              onClick={() => {
+                setActiveConversationId(conversation.id);
+                setActivePage("chat");
+              }}
             >
               <span className="conversation-title">{conversation.title}</span>
               <span className="conversation-meta">
@@ -264,13 +289,25 @@ export default function App() {
           ))}
         </nav>
 
+        <button
+          className={`eval-page-button ${activePage === "eval" ? "is-active" : ""}`}
+          type="button"
+          onClick={() => setActivePage("eval")}
+        >
+          <span>Eval</span>
+          <small>Fast timing lab</small>
+        </button>
+
         <div className="fast-widget-status">
           <span>Fast chat</span>
           <LLMWidget />
         </div>
       </aside>
 
-      <section className="chat-panel">
+      {activePage === "eval" ? (
+        <EvalPage />
+      ) : (
+        <section className="chat-panel">
         <header className="chat-header">
           <div>
             <p className="route-label">Ultralytics / YoloRAG</p>
@@ -347,8 +384,207 @@ export default function App() {
             </button>
           )}
         </form>
-      </section>
+        </section>
+      )}
     </main>
+  );
+}
+
+function EvalPage() {
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [startedAt, setStartedAt] = useState(null);
+  const [now, setNow] = useState(Date.now());
+  const requestRef = useRef(null);
+  const isRunning = Boolean(startedAt);
+
+  useEffect(() => {
+    if (!isRunning) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 500);
+    return () => window.clearInterval(interval);
+  }, [isRunning]);
+
+  async function handleRun() {
+    const controller = new AbortController();
+    requestRef.current = controller;
+    setError("");
+    setResult(null);
+    setStartedAt(Date.now());
+    setNow(Date.now());
+
+    try {
+      const nextResult = await runFastEvals({
+        signal: controller.signal,
+        onProgress: setResult,
+      });
+      setResult(nextResult);
+    } catch (evalError) {
+      setError(evalError.name === "AbortError" ? "Eval run stopped." : evalError.message);
+    } finally {
+      requestRef.current = null;
+      setStartedAt(null);
+    }
+  }
+
+  function handleStop() {
+    requestRef.current?.abort();
+  }
+
+  const summary = result?.summary;
+  const runDuration = startedAt ? now - startedAt : result?.run?.duration_ms || 0;
+  const metricCards = [
+    ["Avg total", summary?.averages_ms?.total],
+    ["Avg Total TTFT", summary?.averages_ms?.ttft],
+    ["Avg LLM", summary?.averages_ms?.llm],
+    ["Avg retrieval", summary?.averages_ms?.retrieval],
+    ["Avg vector DB", summary?.averages_ms?.vector_search],
+    ["Avg rerank", summary?.averages_ms?.rerank],
+    ["Avg overhead", summary?.averages_ms?.orchestration_overhead],
+  ];
+
+  return (
+    <section className="eval-panel">
+      <header className="eval-header">
+        <div>
+          <p className="route-label">Ultralytics / Eval</p>
+          <h2>Fast endpoint timing</h2>
+        </div>
+        <div className="header-actions">
+          <div className="route-pill">profile_questions.json</div>
+          <div className="route-pill muted">{config.chatApiUrl}</div>
+        </div>
+      </header>
+
+      <section className="eval-hero">
+        <div className="eval-hero-copy">
+          <p className="eval-eyebrow">Real LLM + retrieval run</p>
+          <h3>Run the 30 profile questions through the fast path.</h3>
+          <p>
+            Timing only: total wall time, time to first token, LLM completion,
+            retrieval, query embedding, vector database search, reranking, and
+            orchestration overhead.
+          </p>
+        </div>
+        <div className="eval-run-box">
+          <div>
+            <span>{isRunning ? "Running" : result ? "Last run" : "Ready"}</span>
+            <strong>{formatDuration(runDuration)}</strong>
+          </div>
+          {isRunning ? (
+            <button className="eval-run-button stop" type="button" onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button className="eval-run-button" type="button" onClick={handleRun}>
+              Run eval
+            </button>
+          )}
+        </div>
+      </section>
+
+      {error ? <div className="eval-error">{error}</div> : null}
+
+      <section className="eval-summary-grid" aria-label="Timing summary">
+        {metricCards.map(([label, value]) => (
+          <div className="eval-metric" key={label}>
+            <span>{label}</span>
+            <strong>{formatDurationValue(value)}</strong>
+          </div>
+        ))}
+      </section>
+
+      {summary ? (
+        <section className="eval-run-meta">
+          <div>
+            <span>Completed</span>
+            <strong>
+              {summary.completed_count}/{summary.requested_count}
+            </strong>
+          </div>
+          <div>
+            <span>Retrieval used</span>
+            <strong>{summary.retrieval_used_count}</strong>
+          </div>
+          <div>
+            <span>Retrieval errors</span>
+            <strong>{summary.retrieval_error_count}</strong>
+          </div>
+          <div>
+            <span>Estimated cost</span>
+            <strong>${summary.total_estimated_cost_usd.toFixed(6)}</strong>
+          </div>
+          <div>
+            <span>Avg tokens</span>
+            <strong>
+              {Math.round(summary.average_input_tokens)} in /{" "}
+              {Math.round(summary.average_output_tokens)} out
+            </strong>
+          </div>
+        </section>
+      ) : null}
+
+      <section className="eval-results">
+        <div className="eval-results-header">
+          <h3>Question timings</h3>
+          <span>{result?.dataset?.question_count || 30} questions</span>
+        </div>
+        <div className="eval-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Question</th>
+                <th>Total</th>
+                <th>TTFT</th>
+                <th>LLM</th>
+                <th>Retrieval</th>
+                <th>Vector DB</th>
+                <th>Rerank</th>
+                <th>Overhead</th>
+                <th>Docs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {result?.results?.length ? (
+                result.results.map((item) => (
+                  <EvalResultRow item={item} key={item.id} />
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="9">
+                    {isRunning
+                      ? "Question results will appear as each request finishes."
+                      : "Run eval to populate timing data."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function EvalResultRow({ item }) {
+  const timings = item.timings_ms || {};
+  return (
+    <tr className={item.status === "error" ? "is-error" : ""}>
+      <td>
+        <div className="eval-question-cell">
+          <span>{item.id}</span>
+          <strong>{item.question}</strong>
+          {item.error ? <small>{item.error}</small> : null}
+        </div>
+      </td>
+      <td>{formatDurationValue(timings.total)}</td>
+      <td>{formatDurationValue(timings.ttft)}</td>
+      <td>{formatDurationValue(timings.llm)}</td>
+      <td>{formatDurationValue(timings.retrieval)}</td>
+      <td>{formatDurationValue(timings.vector_search)}</td>
+      <td>{formatDurationValue(timings.rerank)}</td>
+      <td>{formatDurationValue(timings.orchestration_overhead)}</td>
+      <td>{item.retrieval?.returned_count ?? 0}</td>
+    </tr>
   );
 }
 
@@ -396,7 +632,7 @@ function MessageRow({ message, now }) {
           aria-busy={isWorkingMessage}
         >
           {message.content ? (
-            message.content
+            <MarkdownMessage content={message.content} />
           ) : isWorkingMessage ? (
             <WorkingMessage phase={message.phase} />
           ) : (
@@ -405,6 +641,32 @@ function MessageRow({ message, now }) {
         </div>
       </div>
     </article>
+  );
+}
+
+function MarkdownMessage({ content }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        a: MarkdownLink,
+        table: MarkdownTable,
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
+function MarkdownLink({ node, ...props }) {
+  return <a {...props} rel="noreferrer" target="_blank" />;
+}
+
+function MarkdownTable({ node, ...props }) {
+  return (
+    <div className="markdown-table-wrap">
+      <table {...props} />
+    </div>
   );
 }
 
@@ -580,6 +842,11 @@ function formatMessageTime(value) {
 function formatDuration(ms) {
   if (ms < 1000) return `${Math.max(0, Math.round(ms))} ms`;
   return `${(ms / 1000).toFixed(ms < 10000 ? 1 : 0)} s`;
+}
+
+function formatDurationValue(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  return formatDuration(Number(value));
 }
 
 function agentDurationLabel(status, duration) {

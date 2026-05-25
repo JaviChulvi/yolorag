@@ -33,10 +33,10 @@ export default function LLMWidget() {
         { id: "trace", name: "Trace", icon: "sparkles" },
       ],
       theme: {
-        primary: "#042AFF",
-        dark: "#111F68",
-        accent: "#e7ff3c",
-        text: "#0b0b0f",
+        primary: "#2f6bff",
+        dark: "#07080d",
+        accent: "#d7ff2f",
+        text: "#f8fafc",
       },
     }),
     [],
@@ -67,7 +67,7 @@ export default function LLMWidget() {
   }, [widgetConfig]);
 
   return (
-    <p className="mt-4 text-sm text-neutral-500" aria-live="polite">
+    <p className="widget-status-text" aria-live="polite">
       {status}
     </p>
   );

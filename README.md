@@ -146,7 +146,12 @@ Run the same questions through the full RAG path, including the configured LLM:
 PYTHONPATH=src python scripts/eval_profile_latency.py --top-k 8 --mode fast
 ```
 
-Each run prints Mongo vector search, reranking, LLM, and app-overhead timings, then writes a JSON report under `evals/runs/`.
+Each run prints Mongo vector search, reranking, time to first token, LLM, and
+app-overhead timings, then writes a JSON report under `evals/runs/`.
+
+The frontend eval panel imports `evals/profile_questions.json` and calls
+`/api/chat/fast` directly in batches of five. Eval requests opt into final SSE
+metrics and set `analytics=false` so benchmark traffic stays transient.
 
 ## Architecture
 

@@ -31,6 +31,7 @@ class ChatRequest(BaseModel):
     session_id: str | None = None
     context: PageContext | None = None
     analytics: bool = True
+    include_metrics: bool = False
     edit_index: int | None = None
     instructions: str | None = None
     tools: list[str] = Field(default_factory=list)

@@ -241,7 +241,8 @@ class PostgresKnowledgeStore:
 
         embedding_started = time.perf_counter()
         query_embedding = self.embedding_client.embed_texts([query])[0]
-        self.last_query_embedding_ms = int((time.perf_counter() - embedding_started) * 1000)
+        query_embedding_ms = int((time.perf_counter() - embedding_started) * 1000)
+        self.last_query_embedding_ms = query_embedding_ms
 
         with self.Session() as session:
             distance = PostgresChunk.embedding.cosine_distance(query_embedding)
@@ -259,6 +260,7 @@ class PostgresKnowledgeStore:
                 record=chunk.to_chunk_record(),
                 score=float(score) if score is not None else None,
                 provider=self.provider_name,
+                query_embedding_ms=query_embedding_ms,
             )
             for chunk, score in rows
         ]

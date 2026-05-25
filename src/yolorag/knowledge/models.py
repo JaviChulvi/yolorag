@@ -91,3 +91,4 @@ class SearchResult:
     record: ChunkRecord
     score: float | None
     provider: str = "unknown"
+    query_embedding_ms: int = 0

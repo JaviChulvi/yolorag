@@ -53,7 +53,11 @@ class MongoVectorRetriever:
             filters=self.filters or None,
         )
         store_call_ms = _elapsed_ms(vector_started)
-        query_embedding_ms = int(getattr(self.store, "last_query_embedding_ms", 0) or 0)
+        query_embedding_ms = int(
+            candidates[0].query_embedding_ms
+            if candidates
+            else getattr(self.store, "last_query_embedding_ms", 0) or 0
+        )
         vector_search_ms = max(store_call_ms - query_embedding_ms, 0)
 
         if self.reranker is None:

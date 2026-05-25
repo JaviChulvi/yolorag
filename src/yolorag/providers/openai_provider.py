@@ -7,6 +7,7 @@ from openai import AsyncOpenAI
 from yolorag.providers.base import LLMRequest, LLMResponse, LLMStreamEvent
 from yolorag.usage.cost_calculator import CostCalculator
 from yolorag.usage.extractors import OpenAIUsageExtractor
+from yolorag.usage.models import TokenUsage
 
 
 class OpenAIProvider:
@@ -27,6 +28,9 @@ class OpenAIProvider:
         self.cost_calculator = cost_calculator or CostCalculator()
 
     async def complete(self, request: LLMRequest) -> LLMResponse:
+        if request.metadata.get("stream_for_timing") and not request.tools:
+            return await self._streaming_complete(request)
+
         started = time.perf_counter()
         kwargs = self._completion_kwargs(request)
 
@@ -58,6 +62,54 @@ class OpenAIProvider:
             tool_calls=tool_calls,
         )
 
+    async def _streaming_complete(self, request: LLMRequest) -> LLMResponse:
+        started = time.perf_counter()
+        kwargs = self._stream_completion_kwargs(request)
+        stream = await self.client.chat.completions.create(**kwargs)
+
+        chunks: list[str] = []
+        usage: TokenUsage | None = None
+        chunk_count = 0
+        final_chunk: dict | None = None
+        first_token_latency_ms: int | None = None
+
+        async for chunk in stream:
+            raw_chunk = chunk.model_dump()
+            chunk_count += 1
+            final_chunk = raw_chunk
+            if raw_chunk.get("usage"):
+                usage = self.usage_extractor.extract(raw_chunk)
+            for choice in raw_chunk.get("choices", []):
+                delta = choice.get("delta") or {}
+                content = delta.get("content") or ""
+                if not content:
+                    continue
+                if first_token_latency_ms is None:
+                    first_token_latency_ms = _elapsed_ms(started)
+                chunks.append(content)
+
+        normalized_usage = usage or TokenUsage()
+        cost = self.cost_calculator.calculate(
+            provider=self.provider_name,
+            model=request.model,
+            usage=normalized_usage,
+        )
+
+        return LLMResponse(
+            content="".join(chunks),
+            provider=self.provider_name,
+            model=request.model,
+            usage=normalized_usage,
+            cost=cost,
+            latency_ms=_elapsed_ms(started),
+            raw_response={
+                "streamed": True,
+                "chunk_count": chunk_count,
+                "final_chunk": final_chunk,
+            },
+            first_token_latency_ms=first_token_latency_ms or 0,
+        )
+
     async def stream_complete(self, request: LLMRequest):
         kwargs = self._stream_completion_kwargs(request)
         stream = await self.client.chat.completions.create(**kwargs)
@@ -69,6 +121,15 @@ class OpenAIProvider:
                 if raw_chunk.get("usage")
                 else None
             )
+            cost = (
+                self.cost_calculator.calculate(
+                    provider=self.provider_name,
+                    model=request.model,
+                    usage=usage,
+                )
+                if usage is not None
+                else None
+            )
             for choice in raw_chunk.get("choices", []):
                 delta = choice.get("delta") or {}
                 content = delta.get("content") or ""
@@ -76,10 +137,11 @@ class OpenAIProvider:
                     yield LLMStreamEvent(
                         content=content,
                         usage=usage,
+                        cost=cost,
                         raw_chunk=raw_chunk,
                     )
             if usage is not None:
-                yield LLMStreamEvent(usage=usage, raw_chunk=raw_chunk)
+                yield LLMStreamEvent(usage=usage, cost=cost, raw_chunk=raw_chunk)
 
     def _completion_kwargs(self, request: LLMRequest) -> dict:
         kwargs = {
@@ -105,7 +167,7 @@ class OpenAIProvider:
     def _stream_completion_kwargs(self, request: LLMRequest) -> dict:
         kwargs = self._completion_kwargs(request)
         kwargs["stream"] = True
-        if self.provider_name == "openai":
+        if self.provider_name in {"openai", "deepseek"}:
             kwargs["stream_options"] = {"include_usage": True}
         return kwargs
 
@@ -121,3 +183,7 @@ def _normalized_model_name(model: str) -> str:
     if lowered.startswith("ft:"):
         return lowered.split(":", 1)[1]
     return lowered
+
+
+def _elapsed_ms(started: float) -> int:
+    return int((time.perf_counter() - started) * 1000)

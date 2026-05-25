@@ -32,12 +32,14 @@ class LLMResponse:
     latency_ms: int
     raw_response: Any
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    first_token_latency_ms: int = 0
 
 
 @dataclass(frozen=True)
 class LLMStreamEvent:
     content: str = ""
     usage: TokenUsage | None = None
+    cost: CostBreakdown | None = None
     raw_chunk: Any = None
 
 
