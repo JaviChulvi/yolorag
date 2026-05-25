@@ -55,6 +55,14 @@ class RecordingProvider:
 
 
 class ChatApiTests(unittest.TestCase):
+    def test_health_endpoint_reports_ok(self) -> None:
+        client = TestClient(create_app())
+
+        response = client.get("/healthz")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), {"status": "ok"})
+
     def test_chat_streams_sse_and_returns_session_headers(self) -> None:
         provider = RecordingProvider()
         runtime = YoloRAGRuntime(

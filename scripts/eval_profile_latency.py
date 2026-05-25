@@ -75,11 +75,6 @@ def _parse_args() -> argparse.Namespace:
         help="Measure vector search and reranking without calling the LLM provider.",
     )
     parser.add_argument(
-        "--no-rerank",
-        action="store_true",
-        help="Disable reranking for retrieval-only experiments.",
-    )
-    parser.add_argument(
         "--include-answers",
         action="store_true",
         help="Store full model answers in the JSON report instead of short previews.",
@@ -147,7 +142,7 @@ async def _run_retrieval_only(args: argparse.Namespace, cases: list[dict[str, An
     store = build_knowledge_store(args.knowledge_provider)
     retriever = MongoVectorRetriever(
         store=store,
-        reranker=None if args.no_rerank else MongoReranker.from_env(),
+        reranker=MongoReranker.from_env(),
         candidate_limit=args.rerank_candidates,
     )
 
@@ -239,7 +234,7 @@ def _report(
             "rerank_candidate_limit": args.rerank_candidates
             or os.getenv("YOLORAG_RERANK_CANDIDATE_LIMIT"),
             "question_count": len(rows),
-            "rerank_enabled": not args.no_rerank,
+            "rerank_enabled": True,
         },
         "summary": _summary(rows),
         "results": rows,

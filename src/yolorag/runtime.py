@@ -219,9 +219,13 @@ def _build_retriever(knowledge_provider: str | None = None) -> Retriever | None:
     store = build_knowledge_store(knowledge_provider)
     return MongoVectorRetriever(
         store=store,
-        reranker=MongoReranker.from_env(),
+        reranker=_build_reranker(),
         candidate_limit=_env_int_or_none("YOLORAG_RERANK_CANDIDATE_LIMIT"),
     )
+
+
+def _build_reranker() -> MongoReranker:
+    return MongoReranker.from_env()
 
 
 def _env_int(name: str, default: int) -> int:

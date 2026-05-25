@@ -43,6 +43,11 @@ def create_app(
         )
 
     app.include_router(chat_router, prefix="/api")
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok"}
+
     return app
 
 

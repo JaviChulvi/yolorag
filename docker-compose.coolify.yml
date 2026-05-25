@@ -1,0 +1,75 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-yolorag}
+      POSTGRES_USER: ${POSTGRES_USER:-yolorag}
+      POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    restart: unless-stopped
+    environment:
+      OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in Coolify}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:?Set DEEPSEEK_API_KEY in Coolify}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      DEEPSEEK_BASE_URL: ${DEEPSEEK_BASE_URL:-https://api.deepseek.com}
+      YOLORAG_OPENAI_FAST_MODEL: ${YOLORAG_OPENAI_FAST_MODEL:-}
+      YOLORAG_OPENAI_THINKING_MODEL: ${YOLORAG_OPENAI_THINKING_MODEL:-}
+      YOLORAG_DEEPSEEK_FAST_MODEL: ${YOLORAG_DEEPSEEK_FAST_MODEL:-}
+      YOLORAG_DEEPSEEK_THINKING_MODEL: ${YOLORAG_DEEPSEEK_THINKING_MODEL:-}
+      YOLORAG_API_PROVIDER: ${YOLORAG_API_PROVIDER:-deepseek}
+      YOLORAG_API_MODE: ${YOLORAG_API_MODE:-fast}
+      YOLORAG_KNOWLEDGE_PROVIDER: ${YOLORAG_KNOWLEDGE_PROVIDER:-mongodb}
+      YOLORAG_CONVERSATION_PROVIDER: ${YOLORAG_CONVERSATION_PROVIDER:-}
+      YOLORAG_POSTGRES_DSN: postgresql+psycopg://${POSTGRES_USER:-yolorag}:${SERVICE_PASSWORD_POSTGRES}@postgres:5432/${POSTGRES_DB:-yolorag}
+      YOLORAG_POSTGRES_CHUNKS_TABLE: ${YOLORAG_POSTGRES_CHUNKS_TABLE:-docs_chunks}
+      YOLORAG_POSTGRES_EMBEDDING_MODEL: ${YOLORAG_POSTGRES_EMBEDDING_MODEL:-text-embedding-3-large}
+      YOLORAG_POSTGRES_EMBEDDING_DIMENSIONS: ${YOLORAG_POSTGRES_EMBEDDING_DIMENSIONS:-3072}
+      YOLORAG_EMBEDDING_BATCH_SIZE: ${YOLORAG_EMBEDDING_BATCH_SIZE:-64}
+      YOLORAG_MONGODB_URI: ${YOLORAG_MONGODB_URI:?Set YOLORAG_MONGODB_URI in Coolify}
+      YOLORAG_MONGODB_AI_API_KEY: ${YOLORAG_MONGODB_AI_API_KEY:?Set YOLORAG_MONGODB_AI_API_KEY in Coolify}
+      YOLORAG_MONGODB_DB: ${YOLORAG_MONGODB_DB:-yolorag}
+      YOLORAG_MONGODB_CHUNKS_COLLECTION: ${YOLORAG_MONGODB_CHUNKS_COLLECTION:-docs_chunks}
+      YOLORAG_MONGODB_MESSAGES_COLLECTION: ${YOLORAG_MONGODB_MESSAGES_COLLECTION:-chat_messages}
+      YOLORAG_MONGODB_VECTOR_INDEX: ${YOLORAG_MONGODB_VECTOR_INDEX:-autoembed_index}
+      YOLORAG_EMBEDDING_MODEL: ${YOLORAG_EMBEDDING_MODEL:-voyage-4}
+      YOLORAG_RERANK_MODEL: ${YOLORAG_RERANK_MODEL:-rerank-2.5-lite}
+      YOLORAG_CHAT_VECTOR_TOP_K: ${YOLORAG_CHAT_VECTOR_TOP_K:-2}
+      YOLORAG_RETRIEVAL_MIN_SCORE: ${YOLORAG_RETRIEVAL_MIN_SCORE:-0.50}
+      YOLORAG_RERANK_CANDIDATE_LIMIT: ${YOLORAG_RERANK_CANDIDATE_LIMIT:-}
+      YOLORAG_DEEP_MAX_STEPS: ${YOLORAG_DEEP_MAX_STEPS:-6}
+      YOLORAG_DEEP_TOOL_TIMEOUT_SECONDS: ${YOLORAG_DEEP_TOOL_TIMEOUT_SECONDS:-20}
+      YOLORAG_MCP_SERVERS: ${YOLORAG_MCP_SERVERS:-}
+      GITHUB_MCP_TOKEN: ${GITHUB_MCP_TOKEN:-}
+      YOLORAG_CORS_ORIGINS: ${YOLORAG_CORS_ORIGINS:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    expose:
+      - "8080"
+
+volumes:
+  postgres_data:

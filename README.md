@@ -138,6 +138,35 @@ YOLORAG_RETRIEVAL_MIN_SCORE=0.50
 PYTHONPATH=src python3 -m unittest discover -s tests
 ```
 
+## Docker And Coolify
+
+The Coolify deployment lives in `docker-compose.coolify.yml`. It builds separate
+backend and frontend images, runs `pgvector/pgvector:pg17`, and loads the
+precomputed PostgreSQL embeddings from `deploy/postgres/init/010_docs_chunks.sql.gz`
+on first database initialization.
+
+Regenerate that seed from the local pgvector database:
+
+```bash
+PYTHONPATH=src python scripts/export_postgres_seed.py
+```
+
+Local smoke test:
+
+```bash
+SERVICE_PASSWORD_POSTGRES=yolorag docker compose \
+  -f docker-compose.coolify.yml \
+  -f docker-compose.local.yml \
+  up -d --build
+```
+
+The frontend is served on `http://127.0.0.1:8080` and proxies `/api/*` to the
+backend. MongoDB remains an external Atlas-backed provider; the compose stack
+does not run a local MongoDB because this demo uses Atlas vector search.
+
+See `deploy/README.md` for the Coolify environment variables and seed refresh
+notes.
+
 ## Latency Evals
 
 Run the profile questions against MongoDB retrieval only:
