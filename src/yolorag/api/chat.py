@@ -32,9 +32,10 @@ async def chat(payload: ChatRequest, request: Request) -> StreamingResponse:
 
 @router.post("/chat/fast")
 async def chat_fast(payload: ChatRequest, request: Request) -> StreamingResponse:
-    user_message = payload.latest_user_message()
-    if user_message is None:
+    user_message_index = _latest_user_message_index(payload)
+    if user_message_index is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
+    user_message_content = payload.messages[user_message_index].content
 
     session_id = payload.session_id or str(uuid4())
     request_id = str(uuid4())
@@ -42,15 +43,13 @@ async def chat_fast(payload: ChatRequest, request: Request) -> StreamingResponse
 
     try:
         runtime = _fast_runtime(request)
-        composed_user_message = _compose_user_message(payload, user_message.content)
         stream = content_event_stream(
             runtime.stream_answer(
-                user_message=composed_user_message,
+                user_message=user_message_content,
                 conversation_id=session_id,
-                conversation_messages=_model_messages(payload, composed_user_message),
-                raw_user_message=user_message.content,
+                conversation_messages=_model_messages(payload),
                 request_id=request_id,
-                user_message_index=_latest_user_message_index(payload),
+                user_message_index=user_message_index,
                 include_metrics=payload.include_metrics,
                 persist=payload.analytics,
             ),
@@ -74,9 +73,10 @@ async def chat_fast(payload: ChatRequest, request: Request) -> StreamingResponse
 
 @router.post("/chat/deep")
 async def chat_deep(payload: ChatRequest, request: Request) -> StreamingResponse:
-    user_message = payload.latest_user_message()
-    if user_message is None:
+    user_message_index = _latest_user_message_index(payload)
+    if user_message_index is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
+    user_message_content = payload.messages[user_message_index].content
 
     session_id = payload.session_id or str(uuid4())
     request_id = str(uuid4())
@@ -84,15 +84,13 @@ async def chat_deep(payload: ChatRequest, request: Request) -> StreamingResponse
 
     try:
         runtime = _deep_runtime(request)
-        composed_user_message = _compose_user_message(payload, user_message.content)
         stream = _text_from_deep_events(
             runtime.stream_answer(
-                user_message=composed_user_message,
+                user_message=user_message_content,
                 conversation_id=session_id,
-                conversation_messages=_model_messages(payload, composed_user_message),
-                raw_user_message=user_message.content,
+                conversation_messages=_model_messages(payload),
                 request_id=request_id,
-                user_message_index=_latest_user_message_index(payload),
+                user_message_index=user_message_index,
             ),
             error_prefix="Deep chat generation failed",
         )
@@ -114,9 +112,10 @@ async def chat_deep(payload: ChatRequest, request: Request) -> StreamingResponse
 
 @router.post("/chat/deep/events")
 async def chat_deep_events(payload: ChatRequest, request: Request) -> StreamingResponse:
-    user_message = payload.latest_user_message()
-    if user_message is None:
+    user_message_index = _latest_user_message_index(payload)
+    if user_message_index is None:
         raise HTTPException(status_code=400, detail="At least one user message is required.")
+    user_message_content = payload.messages[user_message_index].content
 
     session_id = payload.session_id or str(uuid4())
     request_id = str(uuid4())
@@ -124,15 +123,13 @@ async def chat_deep_events(payload: ChatRequest, request: Request) -> StreamingR
 
     try:
         runtime = _deep_runtime(request)
-        composed_user_message = _compose_user_message(payload, user_message.content)
         stream = typed_event_stream(
             runtime.stream_answer(
-                user_message=composed_user_message,
+                user_message=user_message_content,
                 conversation_id=session_id,
-                conversation_messages=_model_messages(payload, composed_user_message),
-                raw_user_message=user_message.content,
+                conversation_messages=_model_messages(payload),
                 request_id=request_id,
-                user_message_index=_latest_user_message_index(payload),
+                user_message_index=user_message_index,
             ),
             error_prefix="Deep chat generation failed",
         )
@@ -177,17 +174,11 @@ def _message_counts(payload: ChatRequest) -> tuple[int, int]:
     return user_message_count, user_message_count
 
 
-def _model_messages(payload: ChatRequest, composed_user_message: str) -> list[dict[str, str]]:
-    latest_user_index = _latest_user_message_index(payload)
-    messages = []
-    for index, message in enumerate(payload.messages):
-        content = (
-            composed_user_message
-            if latest_user_index is not None and index == latest_user_index
-            else message.content
-        )
-        messages.append({"role": message.role, "content": content})
-    return messages
+def _model_messages(payload: ChatRequest) -> list[dict[str, str]]:
+    return [
+        {"role": message.role, "content": message.content}
+        for message in payload.messages
+    ]
 
 
 def _latest_user_message_index(payload: ChatRequest) -> int | None:
@@ -195,20 +186,6 @@ def _latest_user_message_index(payload: ChatRequest) -> int | None:
         if payload.messages[index].role == "user":
             return index
     return None
-
-
-def _compose_user_message(payload: ChatRequest, content: str) -> str:
-    parts = []
-    if payload.instructions:
-        parts.append(f"Instructions:\n{payload.instructions}")
-    if payload.context:
-        context = payload.context.compact_text()
-        if context:
-            parts.append(f"Page context:\n{context}")
-    if not parts:
-        return content
-    parts.append(f"User message:\n{content}")
-    return "\n\n".join(parts)
 
 
 async def _text_from_deep_events(

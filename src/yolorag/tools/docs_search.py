@@ -40,13 +40,11 @@ class DocsSearchTool:
         *,
         default_top_k: int = 4,
         max_top_k: int = 8,
-        max_content_chars: int = 1400,
         min_relevance_score: float | None = None,
     ) -> None:
         self.retriever = retriever
         self.default_top_k = default_top_k
         self.max_top_k = max_top_k
-        self.max_content_chars = max_content_chars
         self.min_relevance_score = min_relevance_score
 
     async def call(self, request: ToolCallRequest) -> ToolCallResult:
@@ -90,16 +88,16 @@ class DocsSearchTool:
             name=self.name,
             output={
                 "query": query,
-                "results": [
-                    _result_payload(result, max_content_chars=self.max_content_chars)
-                    for result in filtered_results
-                ],
+                "results": [_result_payload(result) for result in filtered_results],
             },
             cost_hint="retrieval",
+            metadata={
+                "retrieval": _trace_payload(results=results, filtered_results=filtered_results),
+            },
         )
 
 
-def _result_payload(result: RetrievalResult, *, max_content_chars: int) -> dict[str, Any]:
+def _result_payload(result: RetrievalResult) -> dict[str, Any]:
     metadata = result.document.metadata
     return {
         "id": result.document.id,
@@ -108,7 +106,26 @@ def _result_payload(result: RetrievalResult, *, max_content_chars: int) -> dict[
         "source_path": metadata.get("source_path", ""),
         "score": result.score,
         "reason": result.reason,
-        "content": _truncate(result.document.content, max_content_chars),
+        "content": result.document.content,
+    }
+
+
+def _trace_payload(
+    *,
+    results: list[RetrievalResult],
+    filtered_results: list[RetrievalResult],
+) -> dict[str, Any]:
+    trace = results[0].trace if results else None
+    return {
+        "used": True,
+        "document_ids": [result.document.id for result in filtered_results],
+        "retrieval_ms": trace.total_ms if trace else 0,
+        "query_embedding_ms": trace.query_embedding_ms if trace else 0,
+        "vector_search_ms": trace.vector_search_ms if trace else 0,
+        "rerank_ms": trace.rerank_ms if trace else 0,
+        "candidate_count": trace.candidate_count if trace else len(results),
+        "returned_count": len(filtered_results),
+        "reranked": trace.reranked if trace else False,
     }
 
 
@@ -129,9 +146,3 @@ def _passes_relevance_threshold(
     if min_relevance_score is None:
         return True
     return result.score >= min_relevance_score
-
-
-def _truncate(value: str, max_chars: int) -> str:
-    if len(value) <= max_chars:
-        return value
-    return value[: max_chars - 3].rstrip() + "..."

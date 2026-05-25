@@ -10,6 +10,8 @@ def build_tool_router(
     retriever: Retriever | None = None,
     *,
     min_relevance_score: float | None = None,
+    docs_default_top_k: int = 4,
+    docs_max_top_k: int = 8,
 ) -> ToolRouter:
     dynamic_providers: list[DynamicToolProvider] = []
     mcp_provider = MCPToolProvider.from_env()
@@ -20,6 +22,8 @@ def build_tool_router(
         tools=[
             DocsSearchTool(
                 retriever=retriever,
+                default_top_k=docs_default_top_k,
+                max_top_k=docs_max_top_k,
                 min_relevance_score=min_relevance_score,
             )
         ],

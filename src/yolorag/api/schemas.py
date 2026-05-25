@@ -16,15 +16,6 @@ class PageContext(BaseModel):
     description: str | None = None
     path: str | None = None
 
-    def compact_text(self) -> str:
-        lines = [
-            ("Title", self.title),
-            ("URL", self.url),
-            ("Path", self.path),
-            ("Description", self.description),
-        ]
-        return "\n".join(f"{label}: {value}" for label, value in lines if value)
-
 
 class ChatRequest(BaseModel):
     messages: list[ChatMessage] = Field(min_length=1)
@@ -35,9 +26,3 @@ class ChatRequest(BaseModel):
     edit_index: int | None = None
     instructions: str | None = None
     tools: list[str] = Field(default_factory=list)
-
-    def latest_user_message(self) -> ChatMessage | None:
-        for message in reversed(self.messages):
-            if message.role == "user":
-                return message
-        return None

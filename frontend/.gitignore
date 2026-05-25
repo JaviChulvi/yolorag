@@ -2,4 +2,6 @@ node_modules/
 dist/
 .vite/
 .env
-public/vendor/
+public/vendor/*
+!public/vendor/
+!public/vendor/ultralytics-chat.js

@@ -18,7 +18,9 @@ Instructions for Codex and other coding agents working in this repo.
   - `POST /api/chat/deep` returns only the final answer text.
   - `POST /api/chat/deep/events` streams typed deep-agent events for the console.
 - Fast/deep routing is internal behavior. Do not leak routing labels or implementation mechanics into model-facing prompts unless the product explicitly needs it.
-- Keep `/api/chat/fast` tool-free. Tool use belongs in the deep-agent path.
+- Keep `/api/chat/fast` latency-first, but allow one bounded hidden tool-selection pass so it can call `docs_search` only when documentation context materially improves the answer.
+- Keep fast-chat tool/retrieval events hidden from the public SSE stream; stream only normal content and metrics when requested.
+- Keep richer multi-step tool use, GitHub/MCP investigation, and deep review behavior in the deep-agent path.
 - Preserve true SSE token streaming for fast chat. Do not fake streaming by chunking a completed response after the fact.
 - Retrieval failures must degrade gracefully to LLM-only output instead of breaking chat.
 
@@ -26,8 +28,9 @@ Instructions for Codex and other coding agents working in this repo.
 
 - Do not use hard-coded keyword routing for retrieval decisions. Prefer generic confidence or relevance-score gating.
 - Use one shared retrieval threshold knob unless asked otherwise: `YOLORAG_RETRIEVAL_MIN_SCORE`, with `0.50` as the documented default.
-- Use `raw_user_message` for retrieval/routing decisions when available, so page context and instructions do not make casual greetings look domain-specific.
-- Let the deep agent decide when to call `docs_search`; do not add hidden force-retrieval toggles.
+- Use `raw_user_message` for fast tool selection and retrieval/routing decisions when available, so page context and instructions do not make casual greetings or conversation-local follow-ups look domain-specific.
+- For fast chat, skip `docs_search` when the answer is already clear from the current conversation, and retrieve only when docs context is beneficial.
+- Let fast and deep paths decide when to call `docs_search`; do not add hidden force-retrieval toggles.
 - For public GitHub issue/support replies, first classify the thread type, then gather evidence and draft a concise reply suited to that type.
 - Do not use regex, word-filter, phrase-filter, or indicator-word detection as behavior fixes for any functionality. Prefer general prompt policy, behavior design, evidence discipline, and semantic checks over specific-case word detection.
 

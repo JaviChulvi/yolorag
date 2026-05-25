@@ -437,6 +437,7 @@ function EvalPage() {
     ["Avg Total TTFT", summary?.averages_ms?.ttft],
     ["Avg LLM", summary?.averages_ms?.llm],
     ["Avg retrieval", summary?.averages_ms?.retrieval],
+    ["Avg embedding", summary?.averages_ms?.query_embedding],
     ["Avg vector DB", summary?.averages_ms?.vector_search],
     ["Avg rerank", summary?.averages_ms?.rerank],
     ["Avg overhead", summary?.averages_ms?.orchestration_overhead],
@@ -537,6 +538,7 @@ function EvalPage() {
                 <th>TTFT</th>
                 <th>LLM</th>
                 <th>Retrieval</th>
+                <th>Embedding</th>
                 <th>Vector DB</th>
                 <th>Rerank</th>
                 <th>Overhead</th>
@@ -550,7 +552,7 @@ function EvalPage() {
                 ))
               ) : (
                 <tr>
-                  <td colSpan="9">
+                  <td colSpan="10">
                     {isRunning
                       ? "Question results will appear as each request finishes."
                       : "Run eval to populate timing data."}
@@ -580,6 +582,7 @@ function EvalResultRow({ item }) {
       <td>{formatDurationValue(timings.ttft)}</td>
       <td>{formatDurationValue(timings.llm)}</td>
       <td>{formatDurationValue(timings.retrieval)}</td>
+      <td>{formatDurationValue(timings.query_embedding)}</td>
       <td>{formatDurationValue(timings.vector_search)}</td>
       <td>{formatDurationValue(timings.rerank)}</td>
       <td>{formatDurationValue(timings.orchestration_overhead)}</td>

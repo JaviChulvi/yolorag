@@ -11,21 +11,31 @@ export default function LLMWidget() {
       apiUrl: config.chatApiUrl,
       analytics: true,
       pageContent: true,
-      instructions: "You are the YoloRAG assistant inside the local management console.",
+      instructions:
+        "You are Ultralytics AI, an assistant for Ultralytics Docs, YOLO training, dataset preparation, model export, and deployment questions.",
       branding: {
-        name: "YoloRAG",
-        tagline: "Provider backed RAG chat",
-        pillText: "Chat",
+        name: "Ultralytics AI",
+        tagline: "Ask anything about Ultralytics, YOLO, and more",
+        pillText: "Ask AI",
       },
       welcome: {
-        title: "YoloRAG",
-        message: "Ask against the local FastAPI chat runtime.",
+        title: "Ultralytics AI",
+        message:
+          "Your assistant for Ultralytics Docs. Ask about YOLO26 training, dataset preparation, model export, or deployment.",
         chatExamples: [
-          "Explain how this RAG route decides retrieval",
-          "Summarize the current provider path",
-          "What should I inspect next?",
+          "How do I train YOLO26 on a custom dataset?",
+          "How do I export a model to ONNX?",
+          "How do I run inference on a video?",
         ],
-        searchExamples: ["YOLO export", "provider routing", "retrieval traces"],
+        searchExamples: [
+          "YOLO26 training",
+          "custom dataset YAML",
+          "ONNX export",
+          "video inference",
+        ],
+      },
+      ui: {
+        placeholder: "Ask anything about Ultralytics...",
       },
       tools: [
         { id: "search", name: "Search", icon: "globe" },

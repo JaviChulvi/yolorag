@@ -8,12 +8,16 @@ from yolorag.config.model_defaults import default_model_for
 from yolorag.config.settings import getenv
 from yolorag.core.agent import DeepAgentOrchestrator
 from yolorag.core.conversation_factory import build_conversation_logger
-from yolorag.core.orchestrator import OrchestratorResult, RAGOrchestrator
+from yolorag.core.orchestrator import (
+    FAST_DOCS_TOP_K,
+    FAST_TOOL_TIMEOUT_SECONDS,
+    OrchestratorResult,
+    RAGOrchestrator,
+)
 from yolorag.core.routing import SimpleRoutePlanner
 from yolorag.knowledge.factory import build_knowledge_store
 from yolorag.providers.base import Message, ResponseMode
-from yolorag.providers.deepseek_provider import DeepSeekProvider
-from yolorag.providers.openai_provider import OpenAIProvider
+from yolorag.providers.factory import get_llm_provider
 from yolorag.retrieval.base import Retriever
 from yolorag.retrieval.mongodb import MongoReranker, MongoVectorRetriever
 from yolorag.tools.factory import build_tool_router
@@ -114,7 +118,7 @@ def build_runtime(
         provider_name=selected_provider,
         mode=selected_mode,
     )
-    provider = _build_provider(provider_name=selected_provider, api_base=api_base)
+    provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
     retriever = _build_retriever()
 
     return YoloRAGRuntime(
@@ -130,6 +134,16 @@ def build_runtime(
                 ),
             ),
             retrieval_top_k=_env_int("YOLORAG_CHAT_VECTOR_TOP_K", default=DEFAULT_CHAT_VECTOR_TOP_K),
+            tool_router=build_tool_router(
+                retriever=retriever,
+                min_relevance_score=_env_float(
+                    "YOLORAG_RETRIEVAL_MIN_SCORE",
+                    default=DEFAULT_RETRIEVAL_MIN_SCORE,
+                ),
+                docs_default_top_k=FAST_DOCS_TOP_K,
+                docs_max_top_k=FAST_DOCS_TOP_K,
+            ),
+            fast_tool_timeout_seconds=FAST_TOOL_TIMEOUT_SECONDS,
         ),
         mode=selected_mode,
     )
@@ -141,7 +155,7 @@ def build_deep_runtime(
 ) -> YoloRAGAgentRuntime:
     selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "openai")
     selected_model = _resolve_model(selected_provider, "deep")
-    provider = _build_provider(provider_name=selected_provider, api_base=api_base)
+    provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
     retriever = _build_retriever()
 
     return YoloRAGAgentRuntime(
@@ -165,25 +179,12 @@ def build_deep_runtime(
     )
 
 
-def _build_provider(provider_name: str, api_base: str | None) -> OpenAIProvider | DeepSeekProvider:
-    if provider_name == "openai":
-        return OpenAIProvider(
-            api_key=_require_env("OPENAI_API_KEY"),
-            api_base=api_base or getenv("OPENAI_BASE_URL"),
-        )
-    if provider_name == "deepseek":
-        return DeepSeekProvider(
-            api_key=_require_env("DEEPSEEK_API_KEY"),
-            api_base=api_base or getenv("DEEPSEEK_BASE_URL"),
-        )
-    raise ValueError(f"Unsupported provider {provider_name!r}.")
-
-
 def _resolve_model(
     provider_name: str,
     mode: ResponseMode,
 ) -> str:
-    provider_key = provider_name.upper()
+    normalized_provider = provider_name.lower().strip()
+    provider_key = normalized_provider.upper()
     mode_key = "THINKING" if mode == "deep" else "FAST"
     mode_env_name = f"YOLORAG_{provider_key}_{mode_key}_MODEL"
     legacy_env_name = f"YOLORAG_{provider_key}_MODEL"
@@ -193,7 +194,7 @@ def _resolve_model(
         return configured_model
 
     return default_model_for(
-        provider_name=provider_name,
+        provider_name=normalized_provider,
         mode=mode,
     )
 
@@ -202,13 +203,6 @@ def _resolve_mode(mode: str | ResponseMode) -> ResponseMode:
     if mode in {"fast", "deep"}:
         return mode
     raise ValueError(f"Unsupported response mode {mode!r}.")
-
-
-def _require_env(name: str) -> str:
-    value = getenv(name)
-    if value:
-        return value
-    raise RuntimeError(f"Missing required environment variable {name}.")
 
 
 def _build_retriever() -> Retriever | None:

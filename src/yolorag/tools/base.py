@@ -17,6 +17,7 @@ class ToolCallResult:
     output: Any
     cost_hint: str = "unknown"
     error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class Tool(Protocol):

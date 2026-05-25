@@ -7,8 +7,8 @@ The first implementation slice focuses on the architecture surfaces that matter 
 - Provider classes normalize vendor-specific responses.
 - Usage extractors convert raw provider usage into one `TokenUsage` shape.
 - Cost calculation is owned by this project, with local pricing overrides and `genai-prices` as the fallback pricing backend.
-- The orchestrator uses lightweight, score-gated retrieval so weak matches do not pollute the prompt.
-- The FastAPI chat endpoint exposes the `../llm` widget contract.
+- The fast orchestrator can run one bounded hidden tool-selection pass, then streams the final answer token-by-token.
+- The FastAPI chat endpoint exposes the local widget contract while keeping routing and tool mechanics out of model-facing prompts.
 
 ## Setup
 
@@ -20,12 +20,18 @@ python -m pip install -e .
 
 ## Run The Chat API
 
-The FastAPI app exposes the `../llm` widget chat contract at `POST /api/chat/fast`.
-`POST /api/chat` remains as a legacy alias for the fast route. Deep agent mode is
-available at `POST /api/chat/deep` and returns only the final text response after
-the agent finishes any docs or MCP tool calls. `POST /api/chat/deep/events`
-streams the same deep-agent run as Server-Sent Events, including `status`,
-`tool_call`, `tool_result`, `content`, and `done` payloads for the local console.
+The FastAPI app exposes the widget chat contract at `POST /api/chat/fast`.
+`POST /api/chat` remains as a legacy alias for the fast route. Fast chat can use
+one short hidden tool-selection pass for docs or configured MCP tools when that
+materially improves the answer, then streams only normal content SSE. Widget page
+context and widget instructions are accepted by the request schema but are not
+added to the model prompt in this demo build; routing and retrieval decisions use
+the raw latest user message. Deep agent mode is available at `POST /api/chat/deep`
+and returns only the final text response after the agent finishes any docs or MCP
+tool calls.
+`POST /api/chat/deep/events` streams the same deep-agent run as Server-Sent Events,
+including `status`, `tool_call`, `tool_result`, `content`, and `done` payloads
+for the local console.
 
 ```bash
 PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000
@@ -44,7 +50,7 @@ same session ID on the next request to reuse the in-memory conversation history.
 
 ## Hosted MCP Servers
 
-Deep chat can load tools from MCP servers configured with `YOLORAG_MCP_SERVERS`.
+Fast and deep chat can load tools from MCP servers configured with `YOLORAG_MCP_SERVERS`.
 The existing stdio server config still works, and hosted Streamable HTTP servers
 can be configured with `type: "http"`.
 
@@ -62,7 +68,8 @@ the agent can only use GitHub MCP against the listed repositories.
 
 ## Run The Frontend
 
-The local frontend lives in `frontend/`. It uses Vite, React, Tailwind CSS, and the local `../llm/js/chat.js` widget.
+The local frontend lives in `frontend/`. It uses Vite, React, Tailwind CSS, and
+the copied widget bundle at `frontend/public/vendor/ultralytics-chat.js`.
 
 ```bash
 cd frontend
@@ -72,6 +79,10 @@ npm run dev
 ```
 
 By default, Vite proxies `/api/*` to `http://127.0.0.1:8000`, so the widget can call `/api/chat/fast` while the FastAPI server uses the real configured provider.
+
+`npm run sync:llm` refreshes `frontend/public/vendor/ultralytics-chat.js` from
+the sibling `../llm/js/chat.js` contract. The bundle is included for demo/server
+deploys, so refresh it before building if the sibling widget changes.
 
 Use a real provider for local chat testing:
 
@@ -107,15 +118,17 @@ YOLORAG_DEEPSEEK_THINKING_MODEL=deepseek-v4-pro
 
 DeepSeek fast mode explicitly disables thinking. DeepSeek deep mode enables thinking with high reasoning effort.
 
-## Retrieval Tuning
+## Retrieval And Tool Tuning
 
-Fast chat uses a small retrieval pass and injects context only when the returned
-result clears the configured relevance threshold. Deep chat applies the same
-threshold to the `docs_search` tool results. This avoids hard-coded keyword
-routing while keeping retrieved context quality-gated.
+Fast chat uses one bounded hidden tool-selection pass and then streams the final
+answer. The fast `docs_search` tool is capped in code to 3 results. Retrieved
+content is score-gated with the shared relevance threshold; low-confidence
+matches are filtered out instead of being injected into the final answer path.
+Deep chat applies the same relevance threshold to richer `docs_search` tool
+results. This avoids hard-coded keyword routing while keeping retrieved context
+quality-gated.
 
 ```env
-YOLORAG_CHAT_VECTOR_TOP_K=2
 YOLORAG_RETRIEVAL_MIN_SCORE=0.50
 ```
 
@@ -155,14 +168,17 @@ metrics and set `analytics=false` so benchmark traffic stays transient.
 
 ## Architecture
 
-`providers/` owns model API calls and normalizes responses into `LLMResponse`.
+`providers/` owns model API calls, the registry-backed provider factory, and
+response normalization into `LLMResponse`.
 
 `usage/` owns provider-specific token extraction and cost calculation.
 
 `retrieval/` owns knowledge-source access.
 
-`review/` owns answer verification and confidence scoring.
+`tools/` owns `docs_search`, MCP discovery, MCP allowlist enforcement, and tool routing.
 
-`core/` owns routing, conversation state, orchestration, and traces.
+`core/` owns routing, conversation state, fast orchestration, deep-agent orchestration, and traces.
+
+`api/` owns FastAPI routes, request schemas, and SSE formatting.
 
 The orchestrator should not read raw provider response shapes directly. OpenAI and DeepSeek provider adapters normalize those details before returning.

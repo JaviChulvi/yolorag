@@ -27,12 +27,12 @@ class SimpleRoutePlanner:
         self.min_relevance_score = min_relevance_score
 
     def plan(self, user_message: str, requested_mode: ResponseMode) -> OrchestrationPlan:
-        should_retrieve = bool(user_message.strip())
+        has_user_message = bool(user_message.strip())
 
         if requested_mode == "deep":
             return OrchestrationPlan(
                 mode="deep",
-                should_retrieve=should_retrieve,
+                should_retrieve=has_user_message,
                 top_k=self.deep_top_k,
                 min_relevance_score=self.min_relevance_score,
                 reason="Deep mode uses retrieval when configured and filters low-confidence context.",
@@ -40,8 +40,8 @@ class SimpleRoutePlanner:
 
         return OrchestrationPlan(
             mode="fast",
-            should_retrieve=should_retrieve,
+            should_retrieve=False,
             top_k=self.fast_top_k,
             min_relevance_score=self.min_relevance_score,
-            reason="Fast mode uses lightweight retrieval and filters low-confidence context.",
+            reason="Fast mode skips direct fallback retrieval and relies on bounded tool selection when configured.",
         )

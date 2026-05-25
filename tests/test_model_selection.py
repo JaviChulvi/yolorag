@@ -6,6 +6,7 @@ from unittest.mock import patch
 from yolorag.config.model_defaults import default_model_for, model_matrix
 from yolorag.providers.base import LLMRequest
 from yolorag.providers.deepseek_provider import DeepSeekProvider
+from yolorag.providers.factory import get_llm_provider
 from yolorag.providers.openai_provider import OpenAIProvider
 from yolorag.runtime import _resolve_model
 
@@ -39,6 +40,40 @@ class ModelSelectionTests(unittest.TestCase):
             clear=True,
         ):
             self.assertEqual(_resolve_model("deepseek", "deep"), "custom-deepseek")
+
+    def test_model_resolution_normalizes_provider_name(self) -> None:
+        self.assertEqual(_resolve_model(" OpenAI ", "fast"), "gpt-5.4-mini")
+
+
+class ProviderFactoryTests(unittest.TestCase):
+    def test_builds_openai_provider_from_registry(self) -> None:
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-openai"}, clear=True):
+            provider = get_llm_provider(" openai ")
+
+        self.assertIsInstance(provider, OpenAIProvider)
+        self.assertEqual(provider.provider_name, "openai")
+
+    def test_builds_deepseek_provider_from_registry(self) -> None:
+        with patch.dict("os.environ", {"DEEPSEEK_API_KEY": "test-deepseek"}, clear=True):
+            provider = get_llm_provider("deepseek")
+
+        self.assertIsInstance(provider, DeepSeekProvider)
+        self.assertEqual(provider.provider_name, "deepseek")
+
+    def test_rejects_unsupported_provider_with_supported_names(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            "Unsupported provider 'gemini'. Supported providers: deepseek, openai.",
+        ):
+            get_llm_provider("gemini")
+
+    def test_requires_provider_api_key(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "Missing required environment variable OPENAI_API_KEY.",
+            ):
+                get_llm_provider("openai")
 
 
 class ProviderRequestOptionTests(unittest.TestCase):

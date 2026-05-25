@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from asyncio import run
 from decimal import Decimal
@@ -10,9 +11,10 @@ from yolorag.api.app import create_app
 from yolorag.core.agent import DeepAgentOrchestrator
 from yolorag.core.orchestrator import RAGOrchestrator
 from yolorag.providers.base import LLMRequest, LLMResponse, LLMStreamEvent
-from yolorag.retrieval.base import Document, RetrievalResult
+from yolorag.retrieval.base import Document, RetrievalResult, RetrievalTrace
 from yolorag.runtime import YoloRAGAgentRuntime, YoloRAGRuntime
 from yolorag.tools.base import ToolCallRequest, ToolCallResult
+from yolorag.tools.docs_search import DocsSearchTool
 from yolorag.tools.router import ToolRouter
 from yolorag.usage.models import CostBreakdown, TokenUsage
 
@@ -118,7 +120,148 @@ class ChatApiTests(unittest.TestCase):
         self.assertEqual(provider.stream_calls, 1)
         self.assertEqual(provider.complete_calls, 0)
 
-    def test_chat_streams_llm_answer_when_retrieval_fails(self) -> None:
+    def test_fast_chat_runs_bounded_tool_pass_then_streams_answer(self) -> None:
+        provider = FastToolStreamingProvider()
+        docs_tool = CountingDocsTool()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(
+                provider=provider,
+                model="test-model",
+                tool_router=ToolRouter(tools=[docs_tool]),
+            )
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(
+            "/api/chat/fast",
+            json={"messages": [{"role": "user", "content": "how do I export?"}]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('data: {"content": "Use "}', response.text)
+        self.assertIn('data: {"content": "yolo export."}', response.text)
+        self.assertIn("data: [DONE]", response.text)
+        self.assertNotIn("tool_call", response.text)
+        self.assertEqual(provider.complete_calls, 1)
+        self.assertEqual(provider.stream_calls, 1)
+        self.assertTrue(provider.requests[0].tools)
+        self.assertIsNone(provider.requests[1].tools)
+        self.assertEqual(docs_tool.calls, ["docs_search"])
+        self.assertEqual(provider.requests[1].messages[-1]["role"], "tool")
+
+    def test_fast_chat_skips_tools_when_planner_returns_no_tool(self) -> None:
+        cases = [
+            [{"role": "user", "content": "hello"}],
+            [{"role": "user", "content": "what is the capital of France?"}],
+            [
+                {"role": "user", "content": "how do I export YOLO?"},
+                {"role": "assistant", "content": "Use yolo export."},
+                {"role": "user", "content": "what did I ask?"},
+            ],
+        ]
+
+        for messages in cases:
+            with self.subTest(latest_user_message=messages[-1]["content"]):
+                provider = NoToolPlanningProvider()
+                docs_tool = CountingDocsTool()
+                runtime = YoloRAGRuntime(
+                    orchestrator=RAGOrchestrator(
+                        provider=provider,
+                        model="test-model",
+                        tool_router=ToolRouter(tools=[docs_tool]),
+                    )
+                )
+                client = TestClient(create_app(runtime=runtime))
+
+                response = client.post(
+                    "/api/chat/fast",
+                    json={"messages": messages},
+                )
+
+                self.assertEqual(response.status_code, 200)
+                self.assertIn('data: {"content": "Hi there."}', response.text)
+                self.assertEqual(provider.complete_calls, 1)
+                self.assertEqual(provider.stream_calls, 1)
+                self.assertEqual(docs_tool.calls, [])
+                self.assertFalse(
+                    any(
+                        message["role"] == "tool"
+                        for message in provider.requests[1].messages
+                    )
+                )
+
+    def test_fast_tool_selection_uses_raw_user_message_when_prompt_is_composed(self) -> None:
+        provider = NoToolPlanningProvider()
+        docs_tool = CountingDocsTool()
+        orchestrator = RAGOrchestrator(
+            provider=provider,
+            model="test-model",
+            tool_router=ToolRouter(tools=[docs_tool]),
+        )
+        composed_message = (
+            "Instructions:\nYou are the YoloRAG assistant for Ultralytics docs.\n\n"
+            "User message:\nhola me llamo javi"
+        )
+
+        run(
+            _collect_events(
+                orchestrator.stream_answer(
+                    composed_message,
+                    mode="fast",
+                    raw_user_message="hola me llamo javi",
+                )
+            )
+        )
+
+        self.assertEqual(provider.requests[0].messages[-1]["content"], "hola me llamo javi")
+        self.assertEqual(provider.requests[1].messages[-1]["content"], composed_message)
+        self.assertEqual(docs_tool.calls, [])
+
+    def test_fast_chat_metrics_include_docs_search_retrieval_trace(self) -> None:
+        provider = FastToolStreamingProvider()
+        docs_tool = DocsSearchTool(StaticRetrieverWithTrace(score=0.9))
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(
+                provider=provider,
+                model="test-model",
+                tool_router=ToolRouter(tools=[docs_tool]),
+            )
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        response = client.post(
+            "/api/chat/fast",
+            json={
+                "messages": [{"role": "user", "content": "how do I export?"}],
+                "include_metrics": True,
+                "analytics": False,
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"type": "metrics"', response.text)
+        self.assertIn('"retrieval": 41', response.text)
+        self.assertIn('"query_embedding": 5', response.text)
+        self.assertIn('"vector_search": 17', response.text)
+        self.assertIn('"rerank": 19', response.text)
+        self.assertIn('"used": true', response.text)
+        self.assertIn('"reranked": true', response.text)
+        self.assertIn('"candidate_count": 3', response.text)
+        self.assertIn('"returned_count": 1', response.text)
+        self.assertIn('"document_ids": ["doc-1"]', response.text)
+        metrics = _metrics_from_sse(response.text)
+        timings = metrics["timings_ms"]
+        self.assertEqual(timings["retrieval"], 41)
+        self.assertEqual(timings["query_embedding"], 5)
+        self.assertEqual(timings["vector_search"], 17)
+        self.assertEqual(timings["rerank"], 19)
+        self.assertGreaterEqual(timings["llm"], 1)
+        self.assertEqual(
+            timings["total"],
+            timings["retrieval"] + timings["llm"] + timings["orchestration_overhead"],
+        )
+
+    def test_fast_chat_streams_llm_answer_without_direct_retrieval(self) -> None:
         provider = RecordingProvider()
         runtime = YoloRAGRuntime(
             orchestrator=RAGOrchestrator(
@@ -129,11 +272,10 @@ class ChatApiTests(unittest.TestCase):
         )
         client = TestClient(create_app(runtime=runtime))
 
-        with self.assertLogs("yolorag.core.orchestrator", level="WARNING"):
-            response = client.post(
-                "/api/chat/fast",
-                json={"messages": [{"role": "user", "content": "How do I export a YOLO model?"}]},
-            )
+        response = client.post(
+            "/api/chat/fast",
+            json={"messages": [{"role": "user", "content": "How do I export a YOLO model?"}]},
+        )
 
         self.assertEqual(response.status_code, 200)
         self.assertIn('data: {"content": "Echo: "}', response.text)
@@ -172,32 +314,7 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn({"role": "assistant", "content": "Echo: first"}, second_request_messages)
         self.assertEqual(second_request_messages[-1], {"role": "user", "content": "second"})
 
-    def test_chat_includes_page_context_when_present(self) -> None:
-        provider = RecordingProvider()
-        runtime = YoloRAGRuntime(
-            orchestrator=RAGOrchestrator(provider=provider, model="test-model")
-        )
-        client = TestClient(create_app(runtime=runtime))
-
-        client.post(
-            "/api/chat/fast",
-            json={
-                "messages": [{"role": "user", "content": "what page is this?"}],
-                "context": {
-                    "title": "YOLO Export",
-                    "url": "https://docs.ultralytics.com/modes/export/",
-                    "path": "/modes/export/",
-                    "description": "Export docs",
-                },
-            },
-        )
-
-        sent_message = provider.requests[0].messages[-1]["content"]
-        self.assertIn("Page context:", sent_message)
-        self.assertIn("Title: YOLO Export", sent_message)
-        self.assertIn("User message:\nwhat page is this?", sent_message)
-
-    def test_fast_chat_routes_retrieval_on_raw_user_message_not_instructions(self) -> None:
+    def test_fast_chat_fallback_skips_direct_retrieval_for_casual_turn(self) -> None:
         provider = RecordingProvider()
         retriever = StaticRetriever(score=0.2)
         runtime = YoloRAGRuntime(
@@ -218,7 +335,7 @@ class ChatApiTests(unittest.TestCase):
         )
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(retriever.calls, [("hola me llamo javi", 2)])
+        self.assertEqual(retriever.calls, [])
         self.assertNotIn("Sources:", response.text)
         self.assertFalse(
             any(
@@ -311,6 +428,32 @@ class StaticRetriever:
         ]
 
 
+class StaticRetrieverWithTrace(StaticRetriever):
+    async def retrieve(self, query: str, top_k: int = 3) -> list[RetrievalResult]:
+        self.calls.append((query, top_k))
+        return [
+            RetrievalResult(
+                document=Document(
+                    id="doc-1",
+                    title="Export Docs",
+                    content="Use yolo export.",
+                ),
+                score=self.score,
+                reason=f"Test retriever top_k={top_k}",
+                trace=RetrievalTrace(
+                    provider="test",
+                    total_ms=41,
+                    query_embedding_ms=5,
+                    vector_search_ms=17,
+                    rerank_ms=19,
+                    candidate_count=3,
+                    returned_count=1,
+                    reranked=True,
+                ),
+            )
+        ]
+
+
 class FailingRetriever:
     async def retrieve(self, query: str, top_k: int = 3) -> list[RetrievalResult]:
         raise RuntimeError("vector store unavailable")
@@ -338,6 +481,15 @@ class FakeDocsTool:
                 ]
             },
         )
+
+
+class CountingDocsTool(FakeDocsTool):
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def call(self, request: ToolCallRequest) -> ToolCallResult:
+        self.calls.append(request.name)
+        return await super().call(request)
 
 
 class ToolCallingProvider(RecordingProvider):
@@ -371,6 +523,84 @@ class ToolCallingProvider(RecordingProvider):
         )
 
 
+class FastToolStreamingProvider(RecordingProvider):
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.complete_calls += 1
+        self.requests.append(request)
+        return LLMResponse(
+            content="",
+            provider=self.provider_name,
+            model=request.model,
+            usage=TokenUsage(input_tokens=8, output_tokens=2, total_tokens=10),
+            cost=CostBreakdown(total_usd=Decimal("0.000001"), pricing_source="test"),
+            latency_ms=1,
+            raw_response={"test": True},
+            tool_calls=[
+                {
+                    "id": "call-1",
+                    "type": "function",
+                    "function": {
+                        "name": "docs_search",
+                        "arguments": '{"query": "export"}',
+                    },
+                }
+            ],
+        )
+
+    async def stream_complete(self, request: LLMRequest):
+        self.stream_calls += 1
+        self.requests.append(request)
+        yield LLMStreamEvent(content="Use ")
+        yield LLMStreamEvent(content="yolo export.")
+        yield LLMStreamEvent(
+            usage=TokenUsage(input_tokens=12, output_tokens=4, total_tokens=16),
+            cost=CostBreakdown(total_usd=Decimal("0.000002"), pricing_source="test"),
+        )
+
+
+class NoToolPlanningProvider(RecordingProvider):
+    async def complete(self, request: LLMRequest) -> LLMResponse:
+        self.complete_calls += 1
+        self.requests.append(request)
+        return LLMResponse(
+            content="NO_TOOL",
+            provider=self.provider_name,
+            model=request.model,
+            usage=TokenUsage(input_tokens=8, output_tokens=1, total_tokens=9),
+            cost=CostBreakdown(total_usd=Decimal("0.000001"), pricing_source="test"),
+            latency_ms=1,
+            raw_response={"test": True},
+        )
+
+    async def stream_complete(self, request: LLMRequest):
+        self.stream_calls += 1
+        self.requests.append(request)
+        yield LLMStreamEvent(content="Hi there.")
+        yield LLMStreamEvent(
+            usage=TokenUsage(input_tokens=10, output_tokens=3, total_tokens=13),
+            cost=CostBreakdown(total_usd=Decimal("0.000002"), pricing_source="test"),
+        )
+
+
+def _metrics_from_sse(response_text: str) -> dict:
+    for frame in response_text.split("\n\n"):
+        data = "".join(
+            line.removeprefix("data:").strip()
+            for line in frame.splitlines()
+            if line.startswith("data:")
+        )
+        if not data or data == "[DONE]":
+            continue
+        payload = json.loads(data)
+        if payload.get("type") == "metrics":
+            return payload["metrics"]
+    raise AssertionError("metrics event not found")
+
+
+async def _collect_events(stream):
+    return [event async for event in stream]
+
+
 class OrchestratorRetrievalTests(unittest.TestCase):
     def test_main_prompt_does_not_expose_internal_mode_or_budget(self) -> None:
         provider = RecordingProvider()
@@ -385,7 +615,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
         self.assertNotIn("reasoning_budget", main_prompt)
         self.assertEqual(provider.requests[0].mode, "deep")
 
-    def test_fast_retrieves_high_confidence_context_without_text_gate(self) -> None:
+    def test_deep_retrieves_high_confidence_context_without_text_gate(self) -> None:
         provider = RecordingProvider()
         orchestrator = RAGOrchestrator(
             provider=provider,
@@ -394,7 +624,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
             retrieval_top_k=5,
         )
 
-        result = run(orchestrator.answer("Can this work in my pipeline?", mode="fast"))
+        result = run(orchestrator.answer("Can this work in my pipeline?", mode="deep"))
 
         sent_messages = provider.requests[0].messages
         context_messages = [
@@ -404,9 +634,39 @@ class OrchestratorRetrievalTests(unittest.TestCase):
         ]
         self.assertEqual(len(context_messages), 1)
         self.assertTrue(result.trace.retrieval_used)
-        self.assertIn("Fast mode uses lightweight retrieval", result.trace.route_reason)
+        self.assertIn("Deep mode uses retrieval", result.trace.route_reason)
 
-    def test_fast_skips_low_confidence_context(self) -> None:
+    def test_fast_fallback_skips_retrieval_for_non_docs_turns(self) -> None:
+        cases = [
+            "hello",
+            "what is the capital of France?",
+            "what did I ask?",
+        ]
+
+        for user_message in cases:
+            with self.subTest(user_message=user_message):
+                provider = RecordingProvider()
+                retriever = StaticRetriever(score=0.2)
+                orchestrator = RAGOrchestrator(
+                    provider=provider,
+                    model="test-model",
+                    retriever=retriever,
+                    retrieval_top_k=5,
+                )
+
+                result = run(orchestrator.answer(user_message, mode="fast"))
+
+                self.assertEqual(retriever.calls, [])
+                self.assertFalse(result.trace.retrieval_used)
+                self.assertFalse(
+                    any(
+                        "Relevant retrieved context" in message["content"]
+                        for message in provider.requests[0].messages
+                    )
+                )
+                self.assertIn("skips direct fallback retrieval", result.trace.route_reason)
+
+    def test_deep_skips_low_confidence_context(self) -> None:
         provider = RecordingProvider()
         retriever = StaticRetriever(score=0.2)
         orchestrator = RAGOrchestrator(
@@ -416,9 +676,9 @@ class OrchestratorRetrievalTests(unittest.TestCase):
             retrieval_top_k=5,
         )
 
-        result = run(orchestrator.answer("hello", mode="fast"))
+        result = run(orchestrator.answer("How do I export a YOLO model?", mode="deep"))
 
-        self.assertEqual(retriever.calls, [("hello", 5)])
+        self.assertEqual(retriever.calls, [("How do I export a YOLO model?", 5)])
         self.assertFalse(result.trace.retrieval_used)
         self.assertFalse(
             any(
@@ -428,7 +688,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
         )
         self.assertIn("filters low-confidence context", result.trace.route_reason)
 
-    def test_fast_routes_retrieval_with_raw_user_message_when_prompt_is_composed(self) -> None:
+    def test_fast_fallback_skips_retrieval_when_prompt_is_composed(self) -> None:
         provider = RecordingProvider()
         retriever = StaticRetriever(score=0.2)
         orchestrator = RAGOrchestrator(
@@ -450,7 +710,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(retriever.calls, [("hola me llamo javi", 5)])
+        self.assertEqual(retriever.calls, [])
         self.assertFalse(result.trace.retrieval_used)
         self.assertFalse(
             any(
@@ -459,7 +719,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
             )
         )
 
-    def test_fast_retrieves_context_on_domain_follow_up_turns(self) -> None:
+    def test_deep_retrieves_context_on_domain_follow_up_turns(self) -> None:
         provider = RecordingProvider()
         orchestrator = RAGOrchestrator(
             provider=provider,
@@ -468,8 +728,8 @@ class OrchestratorRetrievalTests(unittest.TestCase):
             retrieval_top_k=5,
         )
 
-        run(orchestrator.answer("How do I train a YOLO model?", conversation_id="thread-1"))
-        run(orchestrator.answer("How do I export a YOLO model?", conversation_id="thread-1"))
+        run(orchestrator.answer("How do I train a YOLO model?", conversation_id="thread-1", mode="deep"))
+        run(orchestrator.answer("How do I export a YOLO model?", conversation_id="thread-1", mode="deep"))
 
         second_request_messages = provider.requests[1].messages
         self.assertTrue(
@@ -489,7 +749,7 @@ class OrchestratorRetrievalTests(unittest.TestCase):
         )
 
         with self.assertLogs("yolorag.core.orchestrator", level="WARNING"):
-            result = run(orchestrator.answer("How do I export a YOLO model?"))
+            result = run(orchestrator.answer("How do I export a YOLO model?", mode="deep"))
 
         self.assertEqual(result.answer, "Echo: How do I export a YOLO model?")
         self.assertFalse(result.trace.retrieval_used)

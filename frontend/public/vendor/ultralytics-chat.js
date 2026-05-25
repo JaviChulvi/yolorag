@@ -1,0 +1,1647 @@
+// Ultralytics 🚀 AGPL-3.0 License - https://ultralytics.com/license
+
+class UltralyticsChat {
+  /** Unified glass blur — matches Platform's BLUR constant: `backdrop-blur backdrop-saturate-[1.2]` */
+  static BLUR = "blur(8px) saturate(120%) brightness(1.01)";
+
+  constructor(config = {}) {
+    if (UltralyticsChat._instance) return UltralyticsChat._instance;
+    const d = (o, k, v) => o?.[k] ?? v;
+    this.config = {
+      apiUrl: d(config, "apiUrl", "https://chat-885297101091.us-central1.run.app/api/chat/fast"),
+      instructions: d(config, "instructions", null),
+      maxMessageLength: d(config, "maxMessageLength", 10000),
+      analytics: d(config, "analytics", true),
+      pageContent: d(config, "pageContent", false),
+      branding: {
+        name: d(config.branding, "name", "Ultralytics AI"),
+        tagline: d(config.branding, "tagline", "Ask anything about Ultralytics, YOLO, and more"),
+        logo: d(
+          config.branding,
+          "logo",
+          "https://cdn.prod.website-files.com/680a070c3b99253410dd3dcf/68e4eb1e9893320b26cc02c3_Ultralytics%20Logo.png.svg",
+        ),
+        logomark: d(
+          config.branding,
+          "logomark",
+          "https://storage.googleapis.com/organization-image-assets/ultralytics-botAvatarSrcUrl-1729379860806.svg",
+        ),
+        logoUrl: d(config.branding, "logoUrl", "https://www.ultralytics.com"),
+        pillText: d(config.branding, "pillText", "Ask AI"),
+      },
+      theme: {
+        primary: d(config.theme, "primary", "#042AFF"),
+        dark: d(config.theme, "dark", "#111F68"),
+        accent: d(config.theme, "accent", d(config.theme, "yellow", "#E1FF25")),
+        text: d(config.theme, "text", "#0b0b0f"),
+      },
+      welcome: {
+        title: d(config.welcome, "title", "Hello 👋"),
+        message: d(
+          config.welcome,
+          "message",
+          "I'm an AI assistant trained on Ultralytics documentation - ask me anything!",
+        ),
+        chatExamples: d(config.welcome, "chatExamples") ??
+          d(config.welcome, "examples") ?? [
+            "What's new in YOLO11?",
+            "How do I get started with YOLO?",
+            "Tell me about Enterprise Licensing",
+          ],
+        searchExamples: d(config.welcome, "searchExamples", [
+          "YOLO quickstart",
+          "model training parameters",
+          "export formats",
+          "dataset configuration",
+        ]),
+      },
+      ui: {
+        placeholder: d(config.ui, "placeholder", "Ask anything…"),
+        copyText: d(config.ui, "copyText", "Copy thread"),
+        downloadText: d(config.ui, "downloadText", "Download thread"),
+        clearText: d(config.ui, "clearText", "New chat"),
+      },
+      shouldHandleShortcut: typeof config?.shouldHandleShortcut === "function" ? config.shouldHandleShortcut : null,
+    };
+    this.apiUrl = this.config.apiUrl;
+    this.apiBaseUrl = this.chatApiBaseUrl(this.apiUrl);
+    this.feedbackUrl = config.feedbackUrl ?? `${this.apiBaseUrl}/feedback`;
+    this.messages = [];
+    this.isOpen = false;
+    this.isStreaming = false;
+    this.abortController = null;
+    this.sessionId = null; // New session on each page load; persists across same-domain navigation
+    this.autoScroll = true;
+    this.lastScrollTop = 0;
+    this.mode = "chat";
+    this.scrollY = 0;
+    this.refs = {};
+    this.listeners = new Map();
+    this.inputDebounceTimer = null;
+    this.selectedTools = new Set();
+    this.tools = d(config, "tools", [
+      { id: "search", name: "Search", icon: "globe" },
+      { id: "github", name: "GitHub", icon: "github" },
+    ]);
+    this.toolsOpen = false;
+    this.totalUserMessages = null;
+    this.activeUserMessages = null;
+    this.init();
+    UltralyticsChat._instance = this;
+  }
+
+  qs = (sel, root = document) => root.querySelector(sel);
+  qsa = (sel, root = document) => [...root.querySelectorAll(sel)];
+  chatApiBaseUrl(url) {
+    return url.replace(/\/chat(?:\/(?:fast|deep))?\/?$/, "").replace(/\/$/, "");
+  }
+  getGroupIndex(group) {
+    if (!group) return null;
+    const idx = Number.parseInt(group.dataset?.messageIndex ?? "", 10);
+    return Number.isNaN(idx) ? null : idx;
+  }
+
+  positionTooltip(target, message) {
+    const tip = this.refs.tooltip;
+    if (!target || !tip) return;
+    const rect = target.getBoundingClientRect();
+    tip.textContent = message;
+    tip.style.left = `${rect.left + rect.width / 2}px`;
+    tip.style.top = `${rect.top - 8}px`;
+    tip.classList.add("show");
+  }
+
+  hideTooltip() {
+    const tip = this.refs.tooltip;
+    if (!tip) return;
+    tip.classList.remove("show");
+    clearTimeout(tip.__timer);
+    tip.__timer = null;
+  }
+
+  focusInput(placeCursorEnd = true) {
+    if (!this.refs.input) return;
+    this.refs.input.focus({ preventScroll: true });
+    if (placeCursorEnd) {
+      const len = this.refs.input.value.length;
+      this.refs.input.setSelectionRange(len, len);
+    }
+  }
+
+  resizeInput() {
+    if (!this.refs.input) return;
+    this.refs.input.style.height = "auto";
+    this.refs.input.style.height = `${Math.min(this.refs.input.scrollHeight, 140)}px`;
+  }
+
+  setInputValue(value) {
+    if (!this.refs.input) return;
+    this.refs.input.value = value ?? "";
+    this.resizeInput();
+  }
+
+  setUserMessagesEditable(enabled) {
+    if (!this.refs.messages) return;
+    this.qsa(".ult-message[contenteditable]", this.refs.messages).forEach((el) => {
+      el.contentEditable = enabled ? "true" : "false";
+    });
+  }
+
+  getTool(toolId) {
+    return this.tools.find((t) => t.id === toolId);
+  }
+
+  on(el, ev, fn, opts) {
+    if (!el) return;
+    el.addEventListener(ev, fn, opts);
+    if (!this.listeners.has(el)) this.listeners.set(el, []);
+    this.listeners.get(el).push({ ev, fn, opts });
+  }
+
+  isEditableTarget(target) {
+    if (!(target instanceof Element)) return false;
+    if (target instanceof HTMLElement && target.isContentEditable) return true;
+    return !!target.closest('input, textarea, select, [contenteditable], [role="textbox"]');
+  }
+  el(tag, cls = "", html = "") {
+    const e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (html) e.innerHTML = html;
+    return e;
+  }
+
+  showCopySuccess(btn) {
+    if (!btn) return;
+    clearTimeout(btn.__successTimeout);
+    btn.dataset.successOriginal ??= btn.innerHTML;
+    btn.innerHTML = this.icon("check");
+    btn.classList.add("success");
+    btn.__successTimeout = setTimeout(() => {
+      btn.innerHTML = btn.dataset.successOriginal;
+      delete btn.dataset.successOriginal;
+      btn.classList.remove("success");
+    }, 1500);
+  }
+
+  flashTooltip(target, message) {
+    const tip = this.refs.tooltip;
+    if (!target || !tip) return;
+    this.positionTooltip(target, message);
+    clearTimeout(tip.__timer);
+    tip.__timer = setTimeout(() => this.hideTooltip(), 1600);
+  }
+
+  getPageContext() {
+    let description = "";
+    if (this.config.pageContent) {
+      const main = document.querySelector("main, [role=main]");
+      const clone = main?.cloneNode(true);
+      clone
+        ?.querySelectorAll("[data-chat-ignore], script, style, svg, noscript, canvas, [aria-hidden='true']")
+        .forEach((el) => el.remove());
+      if (clone) {
+        const walker = document.createTreeWalker(clone, NodeFilter.SHOW_TEXT);
+        const parts = [];
+        while (walker.nextNode()) parts.push(walker.currentNode.textContent.trim());
+        description = parts.filter(Boolean).join(" ").slice(0, 5000);
+      }
+    }
+    return {
+      url: window.location.href,
+      title: document.title,
+      description: description || document.querySelector('meta[name="description"]')?.content || "",
+      path: window.location.pathname,
+    };
+  }
+
+  init() {
+    this.ensureViewport();
+    this.loadHighlightJS();
+    this.createStyles();
+    this.createUI();
+    this.attachEvents();
+    this.showWelcome(true);
+    this.updateComposerState();
+    this.watchForRemoval();
+    this.watchTheme();
+  }
+
+  loadHighlightJS() {
+    const scriptId = "hljs-script";
+    if (!window.hljs && !document.getElementById(scriptId)) {
+      const script = this.el("script");
+      script.src = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/highlight.min.js";
+      script.id = scriptId;
+      script.onload = () => window.hljs?.configure({ ignoreUnescapedHTML: true });
+      document.head.appendChild(script);
+    }
+    const lightThemeId = "hljs-theme-light";
+    const darkThemeId = "hljs-theme-dark";
+    if (!document.getElementById(lightThemeId)) {
+      const light = this.el("link");
+      light.rel = "stylesheet";
+      light.id = lightThemeId;
+      light.href = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github.min.css";
+      light.media = "(prefers-color-scheme: light)";
+      document.head.appendChild(light);
+    }
+    if (!document.getElementById(darkThemeId)) {
+      const dark = this.el("link");
+      dark.rel = "stylesheet";
+      dark.id = darkThemeId;
+      dark.href = "https://cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.11.1/build/styles/github-dark.min.css";
+      dark.media = "(prefers-color-scheme: dark)";
+      document.head.appendChild(dark);
+    }
+  }
+
+  highlight(el) {
+    if (!window.hljs) return;
+    el?.querySelectorAll("pre code").forEach((b) => {
+      if (!b.dataset.highlighted) {
+        const lang = [...b.classList].find((c) => c.startsWith("lang-"))?.replace("lang-", "");
+        if (lang) b.classList.add(`language-${lang}`);
+        window.hljs.highlightElement(b);
+      }
+    });
+  }
+
+  ensureViewport() {
+    let viewport = document.querySelector('meta[name="viewport"]');
+    if (!viewport) {
+      viewport = document.createElement("meta");
+      viewport.name = "viewport";
+      document.head.appendChild(viewport);
+    }
+    if (!viewport.content.includes("maximum-scale"))
+      viewport.content = "width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no";
+  }
+
+  watchForRemoval() {
+    const elements = [
+      { element: () => this.styleElement, parent: document.head },
+      { element: () => this.refs.pill, parent: document.body },
+      { element: () => this.refs.modal, parent: document.body },
+      { element: () => this.refs.backdrop, parent: document.body },
+    ];
+    const observer = new MutationObserver(() =>
+      elements.forEach(({ element, parent }) => {
+        const el = element();
+        if (el?.parentNode !== parent) parent.appendChild(el);
+      }),
+    );
+    observer.observe(document.head, { childList: true });
+    observer.observe(document.body, { childList: true });
+    this.domObserver = observer;
+  }
+
+  watchTheme() {
+    const root = document.documentElement;
+    const getTheme = () => {
+      if (
+        root.classList.contains("dark") ||
+        root.dataset.theme === "dark" ||
+        root.dataset.mode === "dark" ||
+        root.style.colorScheme === "dark"
+      )
+        return "dark";
+      if (
+        root.classList.contains("light") ||
+        root.dataset.theme === "light" ||
+        root.dataset.mode === "light" ||
+        root.style.colorScheme === "light"
+      )
+        return "light";
+      return null; // No explicit theme — let OS preference drive light-dark()
+    };
+
+    const apply = () => {
+      const theme = getTheme();
+      for (const el of [this.refs.pill, this.refs.modal]) {
+        if (el) el.style.colorScheme = theme || "";
+      }
+      const lightLink = document.getElementById("hljs-theme-light");
+      const darkLink = document.getElementById("hljs-theme-dark");
+      if (lightLink) lightLink.media = theme ? (theme === "dark" ? "not all" : "all") : "(prefers-color-scheme: light)";
+      if (darkLink) darkLink.media = theme ? (theme === "dark" ? "all" : "not all") : "(prefers-color-scheme: dark)";
+    };
+
+    apply();
+    this.themeObserver = new MutationObserver(apply);
+    this.themeObserver.observe(root, {
+      attributes: true,
+      attributeFilter: ["class", "data-theme", "data-mode", "style"],
+    });
+  }
+
+  destroy() {
+    this.toggle(false);
+    clearTimeout(this.inputDebounceTimer);
+    this.themeObserver?.disconnect();
+    this.domObserver?.disconnect();
+    for (const [el, eventList] of this.listeners) {
+      for (const { ev, fn, opts } of eventList) {
+        el.removeEventListener(ev, fn, opts);
+      }
+    }
+    this.listeners.clear();
+    this.styleElement?.remove();
+    this.refs.modal?.remove();
+    this.refs.backdrop?.remove();
+    this.refs.pill?.remove();
+    this.refs.tooltip?.remove();
+    this.refs = {};
+    UltralyticsChat._instance = null;
+  }
+
+  createStyles() {
+    const { primary, dark, accent, text } = this.config.theme;
+    const styleContent = `
+      *{box-sizing:border-box}
+
+      /* ========== CENTRALIZED COLOR PALETTE ========== */
+      .ultralytics-chat-pill,.ult-chat-modal{
+        /* Brand colors (configurable) */
+        --ult-primary:${primary};
+        --ult-dark:${dark};
+        --ult-accent:${accent};
+        /* Light defaults (fallback for browsers without light-dark() support) */
+        --ult-text:${text};--ult-text:light-dark(${text},#f5f5f5);
+        --ult-bg:rgba(255,255,255,.95);--ult-bg:light-dark(rgba(255,255,255,.95),rgba(10,10,11,.95));
+        --ult-bg-secondary:#f7f7f9;--ult-bg-secondary:light-dark(#f7f7f9,#131318);
+        --ult-bg-tertiary:#f1f2f6;--ult-bg-tertiary:light-dark(#f1f2f6,#17181d);
+        --ult-bg-hover:#e9eaec;--ult-bg-hover:light-dark(#e9eaec,#2a2b30);
+        --ult-bg-code:#f6f8fa;--ult-bg-code:light-dark(#f6f8fa,#0d1117);
+        --ult-border:#e5e7eb;--ult-border:light-dark(#e5e7eb,#232327);
+        --ult-border-light:#eceff5;--ult-border-light:light-dark(#eceff5,#1c1c22);
+        --ult-text-secondary:#6b7280;--ult-text-secondary:light-dark(#6b7280,#a1a1aa);
+        --ult-text-tertiary:#9ca3af;--ult-text-tertiary:light-dark(#9ca3af,#71717a);
+        --ult-text-muted:#4b5563;--ult-text-muted:light-dark(#4b5563,#a1a1aa);
+        --ult-success:#26C000;
+        --ult-pill-bg:var(--ult-accent);--ult-pill-bg:light-dark(var(--ult-accent),#40434f);
+        --ult-pill-text:var(--ult-dark);--ult-pill-text:light-dark(var(--ult-dark),#fff);
+        --ult-pill-shadow:0 20px 38px rgba(2,6,23,.22),0 8px 18px rgba(2,6,23,.14);--ult-pill-shadow:0 20px 38px light-dark(rgba(2,6,23,.22),rgba(0,0,0,.5)),0 8px 18px light-dark(rgba(2,6,23,.14),rgba(0,0,0,.32));
+        --ult-modal-shadow:0 24px 60px rgba(2,6,23,.25),0 8px 24px rgba(2,6,23,.18);--ult-modal-shadow:0 24px 60px light-dark(rgba(2,6,23,.25),rgba(0,0,0,.5)),0 8px 24px light-dark(rgba(2,6,23,.18),rgba(0,0,0,.4));
+        --ult-msg-hover:rgba(247,247,249,.4);--ult-msg-hover:light-dark(rgba(247,247,249,.4),rgba(19,19,24,.4));
+        --ult-msg-border:rgba(229,231,235,.6);--ult-msg-border:light-dark(rgba(229,231,235,.6),rgba(35,35,39,.6));
+        --ult-code-border:#e5e7eb;--ult-code-border:light-dark(#e5e7eb,#30363d);
+        --ult-code-inline:#f4f4f5;--ult-code-inline:light-dark(#f4f4f5,#1e1e22);
+        --ult-tool-bg:#ebf4ff;--ult-tool-bg:light-dark(#ebf4ff,rgba(4,133,255,.15));
+        --ult-tool-text:#0485ff;--ult-tool-text:light-dark(#0485ff,#5b9fff);
+        --ult-tool-hover-bg:#d9ebff;--ult-tool-hover-bg:light-dark(#d9ebff,rgba(4,133,255,.2));
+        --ult-tool-hover-text:#0475e6;--ult-tool-hover-text:light-dark(#0475e6,#7db3ff)
+      }
+      /* ========== END COLOR PALETTE ========== */
+
+      .ult-backdrop{display:none;position:fixed;inset:0;background:rgba(255,255,255,.07);
+        backdrop-filter:${UltralyticsChat.BLUR};-webkit-backdrop-filter:${UltralyticsChat.BLUR};
+        z-index:9999;opacity:0;visibility:hidden;transition:opacity .2s ease-out,visibility .2s;pointer-events:none}
+      .ult-backdrop.open{display:block;opacity:1;visibility:visible;pointer-events:auto}
+
+      .ultralytics-chat-pill{position:fixed;right:16px;bottom:36px;padding:14px 22px;border-radius:9999px;background:var(--ult-pill-bg);
+        color:var(--ult-pill-text);border:0;cursor:pointer;font-size:18px;font-weight:500;box-shadow:var(--ult-pill-shadow);
+        z-index:10000;transition:opacity .2s ease-out,transform .15s ease-out;
+        display:inline-flex;align-items:center;gap:10px;transform:scale(1) translateZ(0);opacity:1;
+        -webkit-user-select:none;user-select:none;touch-action:none;will-change:opacity,transform}
+      .ultralytics-chat-pill:hover{transform:scale(1.05) translateZ(0)}
+      .ultralytics-chat-pill:focus-visible{outline:none;box-shadow:0 0 0 3px var(--ult-primary)}
+      .ultralytics-chat-pill.hidden{opacity:0;pointer-events:none}
+      .ultralytics-chat-pill img{width:30px;height:30px;border-radius:3px;pointer-events:none}
+
+      .ult-chat-modal{all:initial;font-family:system-ui,sans-serif;
+        position:fixed;left:50%;top:50%;width:min(760px,calc(100vw - 40px));height:min(80vh,820px);background:var(--ult-bg);border:0;border-radius:16px;
+        box-shadow:var(--ult-modal-shadow);z-index:10001;
+        transform:translate(-50%,-50%) translateZ(0);opacity:0;visibility:hidden;
+        transition:opacity .2s ease-out,visibility .2s;
+        flex-direction:column;overflow:hidden;text-align:left;display:flex;pointer-events:none;will-change:opacity}
+      .ult-chat-modal.open{opacity:1;visibility:visible;pointer-events:auto}
+
+      .ult-chat-header{padding:16px 18px;display:flex;justify-content:space-between;align-items:center}
+      .ult-chat-title{display:flex;align-items:center;gap:10px}
+      .ult-chat-title a{display:inline-flex;cursor:pointer}
+      .ult-chat-title img{max-height:32px;max-width:180px}
+      .ult-subtle{font-size:12px;color:var(--ult-text-secondary)}
+      .ult-header-actions{display:flex;gap:6px;align-items:center}
+      .ult-icon-btn{background:transparent;border:0;width:32px;height:32px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--ult-text-secondary);transition:.15s;touch-action:manipulation;position:relative;outline:none}
+      .ult-icon-btn:hover{transform:translateY(-1px);color:var(--ult-text);background:var(--ult-bg-hover)}
+      .ult-icon-btn:focus-visible{box-shadow:0 0 0 2px var(--ult-primary)}
+
+      .ult-welcome{padding:18px}.ult-welcome-title{all:unset;display:block;font-size:16px;font-weight:700;margin:0 0 6px;color:var(--ult-text);line-height:1.4}.ult-welcome p{all:unset;display:block;margin:0;color:var(--ult-text-muted);font-size:14px;line-height:1.5}
+      .ult-examples{padding:12px 18px 6px;display:flex;flex-wrap:wrap;gap:10px}
+      .ult-example{padding:10px 12px;background:var(--ult-bg-secondary);border:0;border-radius:999px;cursor:pointer;font-size:12px;color:var(--ult-text);transition:.12s;touch-action:manipulation;outline:none}
+      .ult-example:hover{transform:translateY(-1px);filter:brightness(.98)}
+      .ult-example:focus-visible{box-shadow:0 0 0 2px var(--ult-primary)}
+
+      .ult-chat-messages{flex:1;overflow-y:auto;padding:0 18px 18px;display:flex;flex-direction:column;gap:14px;-webkit-overflow-scrolling:touch;scroll-behavior:smooth}
+      .ult-message-group{padding:8px 8px 4px;margin:-8px -8px 0;border-radius:10px;transition:background .15s ease,border .15s ease;border:1px solid transparent;position:relative}
+      .ult-message-group:first-child{margin-top:0}
+      .ult-message-group:hover{background:var(--ult-msg-hover);border-color:var(--ult-msg-border)}
+      .ult-message-group:hover .ult-message-actions,.ult-message-group:focus-within .ult-message-actions{opacity:1}
+      .ult-message-label{display:flex;align-items:center;gap:8px;font-size:11px;font-weight:800;color:var(--ult-text-secondary);text-transform:uppercase;letter-spacing:.03em;padding:0 2px}
+      .ult-message-label img{max-height:24px;max-width:24px;border-radius:4px}
+      .ult-user-icon{color:var(--ult-accent)}
+      .ult-message{font-size:14px;line-height:1.6;color:var(--ult-text);padding:0 2px;word-break:break-word;text-align:left}
+      .ult-message-actions{display:flex;gap:4px;opacity:0;transition:opacity .15s;margin-top:6px;padding-left:2px}
+      .ult-user-message-actions{position:absolute;right:2px;bottom:0;opacity:0;transition:opacity .15s;pointer-events:none}
+      .ult-message-group:hover .ult-user-message-actions,.ult-message-group:focus-within .ult-user-message-actions{opacity:1;pointer-events:auto}
+      .ult-message a{color:var(--ult-primary);text-underline-offset:2px}.ult-message a:hover{text-decoration:underline}
+      .ult-message strong{font-weight:700;color:var(--ult-text)}
+      .ult-message h1{font-size:18px;font-weight:700;margin:12px 0 6px;line-height:1.4;color:var(--ult-text)}
+      .ult-message h2{font-size:16px;font-weight:700;margin:10px 0 5px;line-height:1.4;color:var(--ult-text)}
+      .ult-message h3{font-size:15px;font-weight:600;margin:8px 0 4px;line-height:1.4;color:var(--ult-text)}
+      .ult-message h1:first-child,.ult-message h2:first-child,.ult-message h3:first-child{margin-top:0}
+      .ult-message ul,.ult-message ol{margin:8px 0 !important;padding-left:20px !important}
+      .ult-message li{margin:2px 0 !important;padding:0 !important}
+      .ult-table-wrap{overflow-x:auto;margin:8px 0}
+      .ult-message table,.ult-message thead,.ult-message tbody,.ult-message tr,.ult-message th,.ult-message td{all:revert}
+      .ult-message table{border-collapse:collapse;font-size:13px;border:1px solid var(--ult-border)}
+      .ult-message th,.ult-message td{border:1px solid var(--ult-border);padding:6px 10px;text-align:left}
+      .ult-message th{font-weight:600}
+      .ult-code-block{position:relative;margin:6px 0}
+      .ult-global-tooltip{position:fixed;background:#1f2937;background:light-dark(#1f2937,#374151);color:#fff;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:500;white-space:nowrap;pointer-events:none;opacity:0;transition:opacity .1s;z-index:10003;transform:translate(-50%,-100%)}
+      .ult-global-tooltip::after{content:'';position:absolute;top:100%;left:50%;transform:translateX(-50%);border:4px solid transparent;border-top-color:#1f2937;border-top-color:light-dark(#1f2937,#374151)}
+      .ult-global-tooltip.show{opacity:1}
+      .ult-code-copy{position:absolute;top:8px;right:8px;background:var(--ult-bg-tertiary);border:0;border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center;cursor:pointer;opacity:0;transition:.12s;color:var(--ult-text-secondary)}
+      .ult-code-block:hover .ult-code-copy{opacity:1}
+      .ult-code-copy:hover{transform:translateY(-1px);color:var(--ult-text);background:var(--ult-bg-hover)}
+      .ult-code-copy.success,.ult-icon-btn.success{color:var(--ult-success)}
+      .ult-message pre{padding:10px 12px;border-radius:10px;overflow:auto;border:1px solid var(--ult-code-border);background:var(--ult-bg-code)}
+      .ult-message code{background:var(--ult-code-inline);padding:2px 6px;border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;border:0}
+      .ult-message pre code{background:transparent;padding:0;border:0;display:block;font-size:13px}
+
+      .ult-search-result{padding:14px;border:1px solid var(--ult-border);border-radius:10px;background:var(--ult-bg);margin-bottom:10px;transition:.12s}
+      .ult-search-result:hover{transform:translateY(-1px);box-shadow:0 4px 12px rgba(2,6,23,.08)}
+      .ult-search-result-title{font-size:15px;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:8px}
+      .ult-search-result-title a{text-decoration:none;color:var(--ult-primary)}
+      .ult-search-result-favicon{width:18px;height:18px;border-radius:4px;flex-shrink:0;background:var(--ult-code-inline);box-shadow:0 0 0 1px rgba(0,0,0,.05)}
+      .ult-search-result-snippet{font-size:13px;line-height:1.5;color:var(--ult-text-muted);margin-bottom:8px}
+      .ult-search-result-meta{display:flex;gap:12px;font-size:11px;color:var(--ult-text-tertiary)}
+
+      .ult-typing{display:inline-flex;gap:4px}
+      .ult-typing span{width:6px;height:6px;background:var(--ult-text-secondary);border-radius:50%;animation:ultTyping 1.2s infinite}
+      .ult-typing span:nth-child(2){animation-delay:.18s}.ult-typing span:nth-child(3){animation-delay:.36s}
+      @keyframes ultTyping{0%,60%,100%{transform:translateY(0);opacity:1}30%{transform:translateY(-6px);opacity:.75}}
+      .ult-thinking{display:flex;align-items:center;gap:8px;padding:0;color:inherit;font-size:inherit}
+
+      .ult-chat-input-container{padding:12px 12px 16px;position:relative}
+      .ult-chat-input-wrapper{background:var(--ult-bg-secondary);border-radius:12px;padding:6px 8px;display:flex;flex-direction:column;gap:0;position:relative;transition:gap .25s ease}
+      .ult-chat-input-wrapper:has(.ult-tool-badges:not(.hidden)){gap:6px}
+      .ult-chat-input-row{display:flex;gap:6px;align-items:center}
+      .ult-tool-add,.ult-chat-send{background:transparent;border:0;width:32px;height:32px;border-radius:8px;cursor:pointer;display:flex;align-items:center;justify-content:center;color:var(--ult-text-secondary);transition:.15s;touch-action:manipulation;position:relative;flex-shrink:0}
+      .ult-tool-add:hover,.ult-chat-send:hover{transform:translateY(-1px);color:var(--ult-text);background:var(--ult-bg-hover)}
+      .ult-chat-send{margin-left:auto}
+      .ult-chat-send svg{width:16px;height:16px}
+      .ult-tools-dropdown{position:absolute;bottom:100%;left:0;margin-bottom:8px;background:var(--ult-bg);border:1px solid var(--ult-border);border-radius:10px;box-shadow:0 8px 20px rgba(2,6,23,.12);padding:6px;min-width:180px;display:none;z-index:10}
+      .ult-tools-dropdown.open{display:block}
+      .ult-tool-option{display:flex;align-items:center;gap:8px;padding:8px 10px;border-radius:6px;cursor:pointer;font-size:14px;color:var(--ult-text);transition:.12s;border:0;background:transparent;width:100%;text-align:left}
+      .ult-tool-option:hover{background:var(--ult-bg-secondary)}
+      .ult-tool-option.selected{color:var(--ult-tool-text)}
+      .ult-tool-option svg{flex-shrink:0}
+      .ult-tool-badges{display:flex;gap:6px;flex-wrap:wrap;padding-top:2px;max-height:100px;opacity:1;transition:max-height .25s ease,opacity .25s ease,padding .25s ease}
+      .ult-tool-badges.hidden{max-height:0;opacity:0;padding-top:0;overflow:hidden}
+      .ult-tool-badge{display:inline-flex;align-items:center;gap:8px;padding:4px 10px;background:var(--ult-tool-bg);color:var(--ult-tool-text);border:1px solid transparent;border-radius:6px;font-size:14px;font-weight:500;position:relative;transition:.12s;cursor:pointer}
+      .ult-tool-badge:hover{background:var(--ult-tool-hover-bg);color:var(--ult-tool-hover-text)}
+      .ult-tool-badge-icon{position:relative;width:16px;height:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center}
+      .ult-tool-badge-icon svg{position:absolute;width:16px;height:16px;top:50%;left:50%;transform:translate(-50%,-50%);transition:opacity .15s}
+      .ult-tool-badge-icon .ult-icon-main{opacity:1}
+      .ult-tool-badge-icon .ult-icon-remove{opacity:0}
+      .ult-tool-badge:hover .ult-tool-badge-icon .ult-icon-main{opacity:0}
+      .ult-tool-badge:hover .ult-tool-badge-icon .ult-icon-remove{opacity:1}
+      .ult-chat-input{flex:1;border:0;font-size:14px;resize:none;max-height:140px;background:transparent;color:var(--ult-text);padding:0;outline:none}
+      .ult-chat-input::placeholder{color:var(--ult-text-tertiary)}
+      .ult-message[contenteditable]{cursor:text;outline:0;background:transparent;padding:0 2px;border:1px solid transparent;border-radius:0;transition:background .15s ease,border-color .15s ease}
+      .ult-message-editing{background:var(--ult-bg-secondary);color:var(--ult-text);border-radius:12px;padding:10px 12px;margin:6px 0;border:1px solid var(--ult-border-light);font-size:14px;line-height:1.45;min-height:42px;max-height:140px;overflow:auto}
+
+      .ult-chat-footer{padding:8px 18px;text-align:left;font-size:11px;color:var(--ult-text-tertiary)}
+      .ult-chat-footer a{color:var(--ult-primary)}
+      .ult-chat-footer a:hover{text-decoration:underline}
+      .ult-footer-stats{color:var(--ult-text-secondary)}
+      .ult-footer-count{font-weight:500}
+
+      .ult-chat-modal[data-mode="search"] .ult-chat-header{order:0}
+      .ult-chat-modal[data-mode="search"] .ult-chat-input-container{order:1;padding:16px 18px;border-top:1px solid var(--ult-border-light);border-bottom:1px solid var(--ult-border-light);background:var(--ult-bg);align-items:center}
+      .ult-chat-modal[data-mode="search"] #ult-welcome,
+      .ult-chat-modal[data-mode="search"] #ult-examples{order:2;width:100%}
+      .ult-chat-modal[data-mode="search"] .ult-chat-messages{order:3}
+
+      .ult-icon-swap{display:flex;align-items:center;justify-content:center}
+      @media (max-width:768px){
+        .ult-backdrop{transition:opacity .15s ease-out,visibility .15s;pointer-events:none}
+        .ultralytics-chat-pill{transition:opacity .15s ease-out,transform .12s ease-out}
+        .ult-chat-modal{transition:opacity .15s ease-out,visibility .15s;position:fixed;left:0;top:0;width:100vw;height:100svh;max-width:100vw;max-height:100svh;border-radius:0;margin:0;padding:0;transform:none!important}
+        .ult-chat-modal.open{transform:none!important;opacity:1;display:flex;flex-direction:column;overflow:hidden}
+        body.ult-modal-open{position:fixed!important;width:100%!important;overflow:hidden!important;-webkit-overflow-scrolling:touch}
+        .ult-subtle{display:none!important}
+        .ult-message-actions{margin-top:4px}
+        .ult-chat-header{padding:8px 12px;min-height:48px;flex-shrink:0;border-bottom:1px solid var(--ult-border-light)}
+        .ult-chat-title{gap:6px;flex:1;min-width:0}
+        .ult-chat-title a{display:inline-flex}
+        .ult-chat-title img{max-height:24px;max-width:120px}
+        .ult-header-actions{gap:2px;flex-shrink:0}
+        .ult-chat-messages{flex:1 1 0;min-height:0;padding:0 0 8px 0;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch}
+        .ult-chat-modal.welcome-mode .ult-chat-messages{display:none}
+        .ult-welcome{padding:10px 14px 0}
+        .ult-welcome-title{font-size:15px;margin:0 0 4px}
+        .ult-welcome p{font-size:13px;margin:0;line-height:1.35}
+        .ult-examples{padding:6px 14px;gap:6px;flex-wrap:wrap}
+        .ult-example{padding:8px 11px;font-size:12px}
+        .ult-chat-input-container{padding:8px 14px 10px;flex:0 0 auto;border-top:1px solid var(--ult-border-light);background:var(--ult-bg)}
+        .ult-chat-modal.welcome-mode .ult-chat-input-container{margin-top:auto}
+        .ult-chat-input-wrapper{padding:5px 7px;border-radius:10px}
+        .ult-chat-input{font-size:16px;max-height:100px}
+        .ult-message-editing{padding:9px 11px;font-size:16px;border-radius:10px;max-height:100px}
+        .ult-chat-footer{padding:6px 14px;font-size:10px}
+        .ult-message-group{gap:3px;padding:0 14px;margin:0 0 8px;position:relative}
+        .ult-user-message-actions{right:0;bottom:0}
+        .ult-message-label{font-size:11px;gap:5px;padding:0;margin-bottom:2px}
+        .ult-message-label img{max-height:20px;max-width:20px}
+        .ult-message-label svg{width:20px;height:20px}
+        .ult-message{font-size:14px;line-height:1.5;padding:0}
+        .ult-message code{font-size:12px;padding:2px 5px}
+        .ult-message pre{padding:8px 10px;font-size:12px;border-radius:8px;margin:4px 0}
+        .ult-search-result{padding:10px;margin-bottom:8px;border-radius:8px}
+        .ult-search-result-title{font-size:14px;margin-bottom:5px}
+        .ult-search-result-snippet{font-size:13px}
+        .ult-search-result-meta{font-size:11px}
+        .ultralytics-chat-pill{right:14px;bottom:28px;padding:12px 18px;font-size:16px}
+        .ultralytics-chat-pill img{width:28px;height:28px}
+      }
+      `;
+    this.styleElement = this.el("style", "", styleContent);
+    document.head.appendChild(this.styleElement);
+  }
+
+  icon(name) {
+    const paths = {
+      copy: '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>',
+      download:
+        '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>',
+      refresh: '<path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/>',
+      close: '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>',
+      like: '<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>',
+      dislike:
+        '<path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"/>',
+      arrowUp: '<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>',
+      square: '<rect x="4.8" y="4.8" width="14.4" height="14.4" rx="2" ry="2"/>',
+      check: '<polyline points="20 6 9 17 4 12"/>',
+      plus: '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+      globe:
+        '<circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>',
+      github:
+        '<path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"/>',
+    };
+    const path = paths[name] ?? (name === "x" ? paths.close : "");
+    return `<svg width="18" height="18" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" fill="none">${path}</svg>`;
+  }
+
+  createUI() {
+    const { logomark, pillText, logo, name, tagline, logoUrl } = this.config.branding;
+    const { title, message, chatExamples } = this.config.welcome;
+    const { placeholder, copyText, downloadText, clearText } = this.config.ui;
+
+    this.refs.backdrop = this.el("div", "ult-backdrop");
+    document.body.appendChild(this.refs.backdrop);
+    this.refs.backdrop.style.display = "none";
+
+    this.refs.pill = this.el(
+      "button",
+      "ultralytics-chat-pill",
+      `<span>${this.escapeHtml(pillText)}</span><img src="${this.escapeHtml(logomark)}" alt="${this.escapeHtml(name)}" />`,
+    );
+    this.refs.pill.setAttribute("aria-label", pillText);
+    this.refs.pill.title = pillText;
+    document.body.appendChild(this.refs.pill);
+
+    this.refs.modal = this.el(
+      "div",
+      "ult-chat-modal",
+      `<div class="ult-chat-header"><div class="ult-chat-title"><a href="${this.escapeHtml(logoUrl)}" target="_blank" rel="noopener"><img src="${this.escapeHtml(logo)}" alt="${this.escapeHtml(name)}" /></a><div class="ult-subtle">${this.escapeHtml(tagline)}</div></div><div class="ult-header-actions"><button class="ult-icon-btn ult-chat-copy" aria-label="${this.escapeHtml(copyText)}" data-tooltip="${this.escapeHtml(copyText)}">${this.icon("copy")}</button><button class="ult-icon-btn ult-chat-download" aria-label="${this.escapeHtml(downloadText)}" data-tooltip="${this.escapeHtml(downloadText)}">${this.icon("download")}</button><button class="ult-icon-btn ult-chat-clear" aria-label="${this.escapeHtml(clearText)}" data-tooltip="${this.escapeHtml(clearText)}">${this.icon("refresh")}</button><button class="ult-icon-btn ult-chat-close" aria-label="Close" data-tooltip="Close">${this.icon("close")}</button></div></div><div id="ult-welcome" class="ult-welcome" style="display:none"><div class="ult-welcome-title">${this.escapeHtml(title)}</div><p>${message}</p></div><div id="ult-examples" class="ult-examples" style="display:none"></div><div class="ult-chat-messages" id="ult-messages" aria-live="polite"></div><div class="ult-chat-input-container"><div class="ult-chat-input-wrapper"><div class="ult-chat-input-row"><button class="ult-tool-add" aria-label="Add tools" data-tooltip="Add tools">${this.icon("plus")}</button><textarea name="message" class="ult-chat-input" placeholder="${this.escapeHtml(placeholder)}" rows="1" maxlength="${this.config.maxMessageLength}" autocomplete="off"></textarea><button class="ult-chat-send" aria-label="Ready" data-tooltip="Ready" style="display:none"><span class="ult-icon-swap" data-icon="square">${this.icon("square")}</span></button></div><div class="ult-tool-badges hidden"></div><div class="ult-tools-dropdown"></div></div></div><div class="ult-chat-footer">Powered by <a href="https://github.com/ultralytics/llm" target="_blank" rel="noopener">Ultralytics Chat</a></div>`,
+    );
+    this.refs.modal.setAttribute("role", "dialog");
+    this.refs.modal.setAttribute("aria-modal", "true");
+    document.body.appendChild(this.refs.modal);
+    this.refs.modal.style.display = "none";
+
+    this.refs.tooltip = this.el("div", "ult-global-tooltip");
+    document.body.appendChild(this.refs.tooltip);
+
+    this.refs.messages = this.qs("#ult-messages", this.refs.modal);
+    this.refs.welcome = this.qs("#ult-welcome", this.refs.modal);
+    this.refs.examples = this.qs("#ult-examples", this.refs.modal);
+    this.refs.input = this.qs(".ult-chat-input", this.refs.modal);
+    this.refs.send = this.qs(".ult-chat-send", this.refs.modal);
+    this.refs.toolAdd = this.qs(".ult-tool-add", this.refs.modal);
+    this.refs.toolsDropdown = this.qs(".ult-tools-dropdown", this.refs.modal);
+    this.refs.toolBadges = this.qs(".ult-tool-badges", this.refs.modal);
+    this.setExamples(chatExamples || []);
+    this.createToolsDropdown();
+  }
+
+  createToolsDropdown() {
+    if (!this.refs.toolsDropdown) return;
+    this.refs.toolsDropdown.innerHTML = this.tools
+      .map((t) => `<button class="ult-tool-option" data-tool="${t.id}">${this.icon(t.icon)}${t.name}</button>`)
+      .join("");
+  }
+
+  toggleToolsDropdown(show) {
+    this.toolsOpen = show ?? !this.toolsOpen;
+    this.refs.toolsDropdown?.classList.toggle("open", this.toolsOpen);
+    if (this.toolsOpen) {
+      this.qsa(".ult-tool-option", this.refs.toolsDropdown).forEach((opt) => {
+        opt.classList.toggle("selected", this.selectedTools.has(opt.dataset.tool));
+      });
+    }
+  }
+
+  addTool(toolId) {
+    if (!this.getTool(toolId) || this.selectedTools.has(toolId)) return;
+    this.selectedTools.add(toolId);
+    this.updateToolBadges();
+    this.toggleToolsDropdown(false);
+    this.focusInput();
+  }
+
+  removeTool(toolId) {
+    if (!this.selectedTools.has(toolId)) return;
+    this.selectedTools.delete(toolId);
+    this.updateToolBadges();
+    this.focusInput();
+  }
+
+  updateToolBadges() {
+    if (!this.refs.toolBadges) return;
+    if (this.selectedTools.size === 0) {
+      this.refs.toolBadges.classList.add("hidden");
+      this.refs.toolBadges.innerHTML = "";
+      return;
+    }
+    const badgeHtml = [...this.selectedTools]
+      .map((id) => {
+        const tool = this.getTool(id);
+        if (!tool) return "";
+        return `<button type="button" class="ult-tool-badge" data-tool="${tool.id}" aria-label="Remove ${tool.name}" tabindex="0"><div class="ult-tool-badge-icon"><span class="ult-icon-main">${this.icon(tool.icon)}</span><span class="ult-icon-remove">${this.icon("x")}</span></div>${tool.name}</button>`;
+      })
+      .filter(Boolean)
+      .join("");
+    this.refs.toolBadges.innerHTML = badgeHtml;
+    this.refs.toolBadges.classList.remove("hidden");
+  }
+
+  setExamples(list) {
+    if (!this.refs.examples) return;
+    this.refs.examples.innerHTML = list
+      .map((q) => `<button class="ult-example" data-q="${this.escapeHtml(q)}">${this.escapeHtml(q)}</button>`)
+      .join("");
+    for (const b of this.qsa(".ult-example", this.refs.examples)) {
+      this.on(b, "click", () => void this.sendMessage(b.dataset.q));
+    }
+  }
+
+  attachEvents() {
+    const m = this.refs.modal;
+    this.setupTooltips();
+    this.on(this.refs.pill, "click", () => this.toggle(true, "chat"));
+    this.on(this.refs.backdrop, "click", () => this.toggle());
+    this.on(this.qs(".ult-chat-close", m), "click", () => this.toggle());
+    this.on(this.qs(".ult-chat-clear", m), "click", () => this.clearSession());
+    this.on(this.qs(".ult-chat-copy", m), "click", () => this.copyThread());
+    this.on(this.qs(".ult-chat-download", m), "click", () => this.downloadThread());
+    this.on(this.refs.toolAdd, "click", (e) => {
+      e.stopPropagation();
+      this.toggleToolsDropdown();
+    });
+    this.on(document, "click", (e) => {
+      if (this.toolsOpen && !this.refs.toolsDropdown?.contains(e.target) && e.target !== this.refs.toolAdd) {
+        this.toggleToolsDropdown(false);
+      }
+    });
+    this.on(this.refs.toolsDropdown, "click", (e) => {
+      const option = e.target.closest(".ult-tool-option");
+      if (option) this.addTool(option.dataset.tool);
+    });
+    this.on(this.refs.toolBadges, "click", (e) => {
+      const badge = e.target.closest(".ult-tool-badge");
+      if (badge) this.removeTool(badge.dataset.tool);
+    });
+    this.on(this.refs.toolBadges, "mouseover", (e) => {
+      const badge = e.target.closest(".ult-tool-badge");
+      if (badge) this.positionTooltip(badge, "Remove");
+    });
+    this.on(this.refs.toolBadges, "mouseout", (e) => {
+      const badge = e.target.closest(".ult-tool-badge");
+      if (!badge || !badge.contains(e.relatedTarget)) this.hideTooltip();
+    });
+    this.on(
+      this.refs.messages,
+      "scroll",
+      () => {
+        const d = this.refs.messages,
+          st = d.scrollTop;
+        this.autoScroll = st >= this.lastScrollTop && d.scrollHeight - st - d.clientHeight < 100;
+        this.lastScrollTop = st;
+      },
+      { passive: true },
+    );
+    this.on(this.refs.input, "input", (e) => {
+      this.resizeInput();
+      if (e.target.value.length === this.config.maxMessageLength)
+        this.flashTooltip(e.target, "⚠️ Message shortened to fit");
+      clearTimeout(this.inputDebounceTimer);
+      this.inputDebounceTimer = setTimeout(() => this.updateComposerState(), 50);
+    });
+    this.on(this.refs.send, "click", () => {
+      if (this.isStreaming) this.stopStreaming();
+      else void this.sendMessage(this.refs.input.value.trim());
+    });
+    this.on(this.refs.input, "keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        void this.sendMessage(this.refs.input.value.trim());
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        this.toggle(false);
+      }
+    });
+    this.on(document, "keydown", (e) => {
+      if (this.isOpen && e.key === "Escape") this.toggle(false);
+      if (
+        !this.isOpen &&
+        !e.defaultPrevented &&
+        !e.isComposing &&
+        !e.repeat &&
+        !this.isEditableTarget(e.target) &&
+        (e.metaKey || e.ctrlKey) &&
+        e.key.toLowerCase() === "k" &&
+        this.config.shouldHandleShortcut?.(e, this) !== false
+      ) {
+        e.preventDefault();
+        this.toggle(true);
+      }
+    });
+
+    this.on(this.refs.messages, "mouseover", (e) => {
+      const btn = e.target.closest("[data-tooltip]");
+      if (btn && this.refs.tooltip && !btn.dataset.tooltipActive) {
+        btn.dataset.tooltipActive = "true";
+        this.positionTooltip(btn, btn.dataset.tooltip);
+      }
+    });
+    this.on(this.refs.messages, "mouseout", (e) => {
+      const btn = e.target.closest("[data-tooltip]");
+      if (btn && (!e.relatedTarget || !btn.contains(e.relatedTarget))) {
+        delete btn.dataset.tooltipActive;
+        this.hideTooltip();
+      }
+    });
+
+    this.on(this.refs.messages, "click", (e) => {
+      if (e.target.closest(".ult-code-copy")) {
+        const btn = e.target.closest(".ult-code-copy");
+        const code = btn.previousElementSibling?.querySelector("code")?.textContent || "";
+        navigator.clipboard
+          ?.writeText(code)
+          .then(() => this.showCopySuccess(btn))
+          .catch(console.error);
+      }
+      const actionBtn = e.target.closest("[data-action]");
+      if (actionBtn) {
+        const action = actionBtn.dataset.action;
+        const group = actionBtn.closest(".ult-message-group");
+        if (action === "copy") {
+          const groups = this.qsa(".ult-message-group[data-role='assistant']", this.refs.messages);
+          const groupIndex = [...groups].indexOf(group);
+          const assistantMessages = this.messages.filter((m) => m.role === "assistant");
+          const messageContent = assistantMessages[groupIndex]?.content;
+          if (messageContent) {
+            navigator.clipboard
+              ?.writeText(messageContent)
+              ?.then(() => this.showCopySuccess(actionBtn))
+              .catch(console.error);
+          }
+        } else if (action === "like" || action === "dislike") {
+          void this.feedback(action === "like" ? "up" : "down").then((submitted) => {
+            if (submitted) this.showCopySuccess(actionBtn);
+          });
+        } else if (action === "retry") {
+          void this.retryLast();
+        } else if (action === "edit") {
+          const messageDiv = group.querySelector(".ult-message");
+          const idx = this.getGroupIndex(group);
+          if (messageDiv && idx !== null) {
+            let newContent = messageDiv.textContent.trim();
+            if (!newContent) return;
+            if (this.isStreaming) {
+              this.flashTooltip(actionBtn, "⚠️ Finish generating first");
+              return;
+            }
+            newContent = this.trimMessage(newContent, actionBtn);
+            messageDiv.textContent = newContent;
+            void this.editAndRestart(idx, newContent).then((ok) => {
+              if (ok) this.showCopySuccess(actionBtn);
+            });
+          }
+        }
+      }
+    });
+
+    this.on(this.refs.messages, "keydown", (e) => {
+      const messageDiv = e.target.closest(".ult-message[contenteditable='true']");
+      if (!messageDiv) return;
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        const group = messageDiv.closest(".ult-message-group");
+        const idx = this.getGroupIndex(group);
+        if (idx !== null) {
+          if (this.isStreaming) {
+            this.flashTooltip(messageDiv, "⚠️ Finish generating first");
+            return;
+          }
+          let newContent = messageDiv.textContent.trim();
+          if (!newContent) return;
+          newContent = this.trimMessage(newContent, messageDiv);
+          messageDiv.textContent = newContent;
+          void this.editAndRestart(idx, newContent);
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        messageDiv.textContent = messageDiv.dataset.originalContent || "";
+        messageDiv.blur();
+      }
+    });
+    this.on(this.refs.messages, "focusin", (e) => {
+      const messageDiv = e.target.closest(".ult-message[contenteditable='true']");
+      if (messageDiv) messageDiv.classList.add("ult-message-editing");
+    });
+    this.on(this.refs.messages, "focusout", (e) => {
+      const messageDiv = e.target.closest(".ult-message[contenteditable='true']");
+      if (messageDiv) messageDiv.classList.remove("ult-message-editing");
+    });
+    this.on(this.refs.messages, "input", (e) => {
+      const messageDiv = e.target.closest(".ult-message[contenteditable='true']");
+      if (!messageDiv) return;
+      const trimmed = this.trimMessage(messageDiv.textContent || "", messageDiv);
+      if (trimmed !== (messageDiv.textContent || "")) messageDiv.textContent = trimmed;
+    });
+    this.setupPillDrag();
+  }
+
+  setupPillDrag() {
+    const pill = this.refs.pill;
+    let ox, oy, rect, moved, lastLeft, lastTop;
+
+    const onMove = (e) => {
+      const dx = e.clientX - ox,
+        dy = e.clientY - oy;
+      if (!moved && Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+      if (!moved) {
+        moved = true;
+        pill.style.cursor = "grabbing";
+        Object.assign(pill.style, { right: "auto", bottom: "auto", left: rect.left + "px", top: rect.top + "px" });
+      }
+      lastLeft = Math.max(0, Math.min(window.innerWidth - rect.width, rect.left + dx));
+      lastTop = Math.max(0, Math.min(window.innerHeight - rect.height, rect.top + dy));
+      pill.style.left = lastLeft + "px";
+      pill.style.top = lastTop + "px";
+    };
+
+    const onUp = (e) => {
+      document.removeEventListener("pointermove", onMove);
+      document.removeEventListener("pointerup", onUp);
+      document.removeEventListener("pointercancel", onUp);
+      pill.releasePointerCapture(e.pointerId);
+      pill.style.cursor = "";
+      if (moved) {
+        // Convert absolute left/top back to corner-relative offsets so CSS
+        // handles resize natively (pill stays anchored to its nearest corner).
+        // Use tracked CSS values + offsetWidth/Height (unaffected by transforms)
+        // instead of getBoundingClientRect() which includes :hover scale.
+        const pw = pill.offsetWidth,
+          ph = pill.offsetHeight;
+        const fromRight = window.innerWidth - lastLeft - pw;
+        const fromBottom = window.innerHeight - lastTop - ph;
+        const useLeft = lastLeft <= fromRight;
+        const useTop = lastTop <= fromBottom;
+        Object.assign(pill.style, {
+          left: useLeft ? lastLeft + "px" : "auto",
+          right: useLeft ? "auto" : fromRight + "px",
+          top: useTop ? lastTop + "px" : "auto",
+          bottom: useTop ? "auto" : fromBottom + "px",
+        });
+        const blocker = (ev) => ev.stopImmediatePropagation();
+        pill.addEventListener("click", blocker, { once: true, capture: true });
+        // 300ms: maximum possible delay between pointerup and click (mobile tap delay)
+        setTimeout(() => pill.removeEventListener("click", blocker, { capture: true }), 300);
+      }
+    };
+
+    this.on(pill, "pointerdown", (e) => {
+      if (e.button !== 0) return;
+      rect = pill.getBoundingClientRect();
+      ox = e.clientX;
+      oy = e.clientY;
+      moved = false;
+      pill.setPointerCapture(e.pointerId);
+      document.addEventListener("pointermove", onMove);
+      document.addEventListener("pointerup", onUp, { once: true });
+      document.addEventListener("pointercancel", onUp, { once: true });
+    });
+  }
+
+  toggle(forceOpen = null, mode = null) {
+    const next = forceOpen === null ? !this.isOpen : !!forceOpen;
+    if (mode) this.mode = mode;
+    if (next === this.isOpen && !mode) return;
+    this.isOpen = next;
+    const modal = this.refs.modal;
+    const backdrop = this.refs.backdrop;
+    const pill = this.refs.pill;
+    if (next) {
+      if (modal) modal.style.display = "flex";
+      if (backdrop) backdrop.style.display = "block";
+      requestAnimationFrame(() => {
+        modal?.classList.add("open");
+        backdrop?.classList.add("open");
+        pill?.classList.add("hidden");
+      });
+    } else {
+      modal?.classList.remove("open");
+      backdrop?.classList.remove("open");
+      pill?.classList.remove("hidden");
+      const hide = () => {
+        if (this.isOpen) return;
+        if (modal) modal.style.display = "none";
+        if (backdrop) backdrop.style.display = "none";
+      };
+      modal?.addEventListener("transitionend", hide, { once: true });
+      backdrop?.addEventListener("transitionend", hide, { once: true });
+      setTimeout(hide, 250);
+    }
+    if (next) {
+      this.scrollY = window.scrollY;
+      document.body.classList.add("ult-modal-open");
+      document.body.style.top = `-${this.scrollY}px`;
+      this.updateUIForMode();
+      if (!this.messages.length) this.showWelcome(true);
+      this.updateComposerState();
+      setTimeout(() => {
+        this.focusInput();
+        this.refs.input?.click();
+      }, 100);
+    } else {
+      document.body.classList.remove("ult-modal-open");
+      document.body.style.top = "";
+      window.scrollTo(0, this.scrollY);
+      if (this.isStreaming) this.stopStreaming();
+    }
+  }
+
+  updateUIForMode() {
+    if (!this.refs.modal) return;
+    const tagline = this.qs(".ult-subtle", this.refs.modal);
+    this.refs.modal.dataset.mode = this.mode;
+    if (this.mode === "search") {
+      if (this.refs.input) this.refs.input.placeholder = "Search for...";
+      if (tagline)
+        tagline.innerHTML = `<strong style="color: ${this.config.theme.primary}; font-weight: 700;">SEARCH</strong> · Find answers in our docs and guides`;
+      if (this.refs.messages) this.refs.messages.innerHTML = "";
+      if (this.refs.welcome)
+        this.refs.welcome.innerHTML = "<p>Enter keywords to find relevant documentation, guides, and resources</p>";
+      this.setExamples(this.config.welcome.searchExamples || []);
+      this.showWelcome(true);
+    } else {
+      if (this.refs.input) this.refs.input.placeholder = this.config.ui.placeholder;
+      if (tagline) tagline.textContent = this.config.branding.tagline;
+      const { title, message, chatExamples } = this.config.welcome;
+      if (this.refs.welcome)
+        this.refs.welcome.innerHTML = `<div class="ult-welcome-title">${this.escapeHtml(title)}</div><p>${message}</p>`;
+      this.setExamples(chatExamples || []);
+      this.renderChatHistory();
+    }
+  }
+
+  showWelcome(show) {
+    if (this.refs.welcome) this.refs.welcome.style.display = show ? "block" : "none";
+    if (this.refs.examples) this.refs.examples.style.display = show ? "flex" : "none";
+    if (this.refs.modal) this.refs.modal.classList.toggle("welcome-mode", show);
+  }
+
+  renderChatHistory() {
+    if (!this.refs.messages) return;
+    this.refs.messages.innerHTML = "";
+    if (!this.messages.length) {
+      this.showWelcome(true);
+      return;
+    }
+    this.showWelcome(false);
+    const prevAutoScroll = this.autoScroll;
+    this.autoScroll = false;
+    for (let i = 0; i < this.messages.length; i++)
+      this.addMessageToUI(this.messages[i].role, this.messages[i].content, i);
+    this.autoScroll = prevAutoScroll;
+    this.refs.messages.scrollTop = this.refs.messages.scrollHeight;
+  }
+
+  setupTooltips() {
+    this.qsa("[data-tooltip]", this.refs.modal).forEach((btn) => {
+      this.on(btn, "mouseenter", (e) => this.positionTooltip(e.currentTarget, e.currentTarget.dataset.tooltip));
+      this.on(btn, "mouseleave", () => this.hideTooltip());
+    });
+  }
+
+  swapSendIcon(name) {
+    const holder = this.qs(".ult-icon-swap", this.refs.send);
+    if (!holder || holder.dataset.icon === name) return;
+    holder.innerHTML = this.icon(name);
+    holder.dataset.icon = name;
+    const label = name === "square" && this.isStreaming ? "Stop" : name === "arrowUp" ? "Send" : "Ready";
+    this.refs.send.setAttribute("aria-label", label);
+    this.refs.send.dataset.tooltip = label;
+  }
+
+  updateComposerState() {
+    if (!this.refs.send) return;
+    const hasText = !!this.refs.input?.value.trim().length;
+    if (this.isStreaming) {
+      this.swapSendIcon("square");
+      this.refs.send.style.display = "flex";
+    } else if (hasText) {
+      this.swapSendIcon("arrowUp");
+      this.refs.send.style.display = "flex";
+    } else {
+      this.refs.send.style.display = "none";
+    }
+  }
+
+  trimMessage(text, target = null) {
+    const max = this.config.maxMessageLength;
+    if (!text || text.length <= max) return text || "";
+    if (target) this.flashTooltip(target, "⚠️ Message shortened to fit");
+    return text.slice(0, max);
+  }
+
+  scrollToBottom() {
+    if (!this.autoScroll || !this.refs.messages) return;
+    requestAnimationFrame(() => {
+      if (this.refs.messages) this.refs.messages.scrollTop = this.refs.messages.scrollHeight;
+    });
+  }
+
+  formatThread() {
+    return this.messages
+      .map((m) => `${m.role === "user" ? "You" : this.config.branding.name}: ${m.content}`)
+      .join("\n\n---\n\n");
+  }
+
+  copyThread() {
+    navigator.clipboard?.writeText(this.formatThread())?.catch(console.error);
+    this.showCopySuccess(this.qs(".ult-chat-copy", this.refs.modal));
+  }
+
+  async feedback(type) {
+    if (!this.config.analytics) return false;
+
+    const vote = type === "up";
+    const userCount = this.messages.filter((m) => m.role === "user").length;
+    if (!userCount) {
+      console.warn("feedback ignored: no user messages yet");
+      return false;
+    }
+    const queryIndex = userCount - 1;
+    try {
+      const response = await fetch(this.feedbackUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          session_id: this.sessionId,
+          query_index: queryIndex,
+          vote,
+        }),
+      });
+      if (!response.ok) {
+        throw new Error(`feedback failed with status ${response.status}`);
+      }
+      return true;
+    } catch (err) {
+      console.warn("feedback failed", err);
+      return false;
+    }
+  }
+
+  retryLast() {
+    const idx = this.messages.findLastIndex((m) => m.role === "assistant");
+    if (idx < 1 || this.messages[idx - 1]?.role !== "user") return;
+    void this.editAndRestart(idx - 1, this.messages[idx - 1].content);
+  }
+
+  async editAndRestart(messageIndex, newContent) {
+    if (this.isStreaming) return false;
+    if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= this.messages.length) return false;
+    const message = this.messages[messageIndex];
+    if (message.role !== "user") return false;
+    newContent = this.trimMessage(newContent);
+    message.content = newContent;
+    this.messages = this.messages.slice(0, messageIndex + 1);
+    const currentGroup = this.qs(`.ult-message-group[data-message-index="${messageIndex}"]`, this.refs.messages);
+    const currentMessage = currentGroup?.querySelector(".ult-message");
+    if (currentMessage) currentMessage.dataset.originalContent = newContent;
+    const groups = this.qsa(".ult-message-group", this.refs.messages);
+    groups.forEach((g) => {
+      const idx = this.getGroupIndex(g);
+      if (idx === null || idx > messageIndex) g.remove();
+    });
+    this.hideTooltip();
+    await this.sendMessage(newContent, false, messageIndex);
+    return true;
+  }
+
+  downloadThread() {
+    const { name } = this.config.branding;
+    const blob = new Blob([this.formatThread()], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = this.el("a");
+    a.href = url;
+    a.download = `${name.toLowerCase().replace(/\s+/g, "-")}-chat-${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  clearSession() {
+    this.messages = [];
+    this.sessionId = null;
+    this.totalUserMessages = null;
+    this.activeUserMessages = null;
+    if (this.refs.messages) this.refs.messages.innerHTML = "";
+    this.showWelcome(true);
+    this.updateComposerState();
+    this.updateFooter();
+    this.focusInput();
+  }
+
+  updateFooter() {
+    const footer = this.qs(".ult-chat-footer", this.refs.modal);
+    if (!footer) return;
+    const total = this.totalUserMessages ?? this.messages.filter((m) => m.role === "user").length;
+    const active = this.activeUserMessages ?? total;
+    // Show "51 messages (11 active)" when pruned, otherwise just "11 messages"
+    const countText =
+      total > 0
+        ? `<span class="ult-footer-count">${total} message${total !== 1 ? "s" : ""}${active < total ? ` (${active} active)` : ""}</span>`
+        : "";
+    const statsHtml = total > 0 ? `<span class="ult-footer-stats">${countText}</span> · ` : "";
+    footer.innerHTML = `${statsHtml}Powered by <a href="https://github.com/ultralytics/llm" target="_blank" rel="noopener">Ultralytics Chat</a>`;
+  }
+
+  stopStreaming() {
+    this.abortController?.abort();
+    this.isStreaming = false;
+    this.abortController = null;
+    this.updateComposerState();
+    this.focusInput();
+  }
+
+  createThinking(label = "Thinking") {
+    const wrapper = this.el("div", "ult-message assistant ult-message-thinking");
+    const thinking = this.el(
+      "p",
+      "ult-thinking",
+      `<span class="ult-thinking-word">${label}</span><span class="ult-typing"><span></span><span></span><span></span></span><span class="ult-thinking-time">(0.0s)</span>`,
+    );
+    wrapper.appendChild(thinking);
+    const timeEl = this.qs(".ult-thinking-time", wrapper);
+    const t0 = performance.now();
+    const tick = setInterval(() => {
+      if (timeEl) timeEl.textContent = `(${((performance.now() - t0) / 1000).toFixed(1)}s)`;
+    }, 100);
+    return { el: wrapper, clear: () => clearInterval(tick) };
+  }
+
+  async performSearch(query) {
+    if (!this.refs.messages) return;
+    this.refs.messages.innerHTML = "";
+    const { el: thinking, clear } = this.createThinking("Searching");
+    this.refs.messages.appendChild(thinking);
+    try {
+      const url = `${this.apiBaseUrl}/search`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      clear();
+      thinking.remove();
+      if (!data.results?.length) {
+        this.refs.messages.innerHTML = '<div class="ult-message">No results found. Try different keywords.</div>';
+        return;
+      }
+      this.refs.messages.innerHTML = data.results
+        .map((r) => {
+          const snippet = r.text?.length > 150 ? `${r.text.slice(0, 150)}...` : r.text || "";
+          const host = (() => {
+            try {
+              return new URL(r.url).hostname;
+            } catch {
+              return "";
+            }
+          })();
+          const faviconUrl = host ? `https://www.google.com/s2/favicons?sz=32&domain=${encodeURIComponent(host)}` : "";
+          const favicon = faviconUrl
+            ? `<img class="ult-search-result-favicon" src="${faviconUrl}" alt="" loading="lazy" />`
+            : "";
+          const metaHost = host ? `<span>${this.escapeHtml(host)}</span>` : "";
+          return `<div class="ult-search-result"><div class="ult-search-result-title">${favicon}<a href="${this.escapeHtml(r.url)}" target="_blank" rel="noopener">${this.escapeHtml(r.title || "")}</a></div><div class="ult-search-result-snippet">${this.escapeHtml(snippet)}</div><div class="ult-search-result-meta"><span class="ult-search-result-score">Match: ${((r.score || 0) * 100).toFixed(0)}%</span>${metaHost}</div></div>`;
+        })
+        .join("");
+    } catch (e) {
+      clear();
+      thinking.remove();
+      if (this.refs.messages)
+        this.refs.messages.innerHTML = `<div class="ult-message">Search error: ${this.escapeHtml(e.message)}</div>`;
+      console.error("Search error:", e);
+    }
+  }
+
+  async sendMessage(text, isNew = true, editIndex = null) {
+    if (!text || this.isStreaming || !this.refs.input || !this.refs.messages) return;
+    text = this.trimMessage(text, this.refs.input);
+    if (!text) return;
+    this.showWelcome(false);
+    this.autoScroll = true;
+    if (this.mode === "search") {
+      this.setInputValue(text);
+      await this.performSearch(text);
+      this.focusInput();
+      return;
+    }
+    if (isNew) {
+      this.messages.push({ role: "user", content: text });
+      this.addMessageToUI("user", text, this.messages.length - 1);
+    }
+    this.setInputValue("");
+    this.isStreaming = true;
+    this.updateComposerState();
+    this.setUserMessagesEditable(false);
+    const group = this.createMessageGroup("assistant", this.messages.length);
+    const { el: thinking, clear } = this.createThinking();
+    group.appendChild(thinking);
+    this.scrollToBottom();
+    this.abortController = new AbortController();
+    const safeEditIndex =
+      Number.isInteger(editIndex) && editIndex >= 0 && editIndex < this.messages.length ? editIndex : null;
+    try {
+      const body = {
+        messages: this.messages.map(({ role, content }) => ({ role, content })),
+        session_id: this.sessionId,
+        context: this.getPageContext(),
+        analytics: this.config.analytics,
+      };
+      if (this.config.instructions) body.instructions = this.config.instructions;
+      if (safeEditIndex !== null) body.edit_index = safeEditIndex;
+      if (this.selectedTools.size > 0) body.tools = [...this.selectedTools];
+      const res = await fetch(this.apiUrl, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: this.abortController.signal,
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const sid = res.headers.get("X-Session-ID");
+      if (sid && !this.sessionId) this.sessionId = sid;
+      // Track server-side message counts
+      const totalCount = res.headers.get("X-Total-User-Messages");
+      const activeCount = res.headers.get("X-Active-User-Messages");
+      if (totalCount) this.totalUserMessages = parseInt(totalCount, 10) || 0;
+      if (activeCount) this.activeUserMessages = parseInt(activeCount, 10) || 0;
+      this.updateFooter();
+      thinking.remove();
+      clear();
+      const div = this.el("div", "ult-message assistant");
+      group.appendChild(div);
+      const reader = res.body?.getReader();
+      if (!reader) throw new Error("No response stream");
+      const decoder = new TextDecoder();
+      let content = "";
+      let renderTimer = null;
+      const scheduleRender = () => {
+        if (renderTimer) return;
+        renderTimer = setTimeout(() => {
+          div.innerHTML = this.renderMarkdown(content, true);
+          this.highlight(div);
+          this.scrollToBottom();
+          renderTimer = null;
+        }, 30);
+      };
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        for (const line of chunk.split("\n")) {
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6);
+          if (data === "[DONE]") continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.content) {
+              content += parsed.content;
+              scheduleRender();
+            } else if (parsed.error) throw new Error(parsed.error);
+          } catch (e) {
+            if (e.message !== "Unexpected end of JSON input") console.error("Parse error:", e);
+          }
+        }
+      }
+      if (renderTimer) clearTimeout(renderTimer);
+      div.innerHTML = this.renderMarkdown(content, false);
+      this.finalizeAssistantMessage(group);
+      this.scrollToBottom();
+      this.messages.push({ role: "assistant", content });
+      this.updateFooter();
+    } catch (e) {
+      thinking.remove();
+      clear();
+      const errorHtml =
+        e.name === "AbortError"
+          ? "<p>Generation stopped.</p>"
+          : "<p>Sorry, I encountered an error. Please try again. If the problem persists, please <a href='https://github.com/ultralytics/llm/issues/new?template=bug-report.yml' target='_blank' rel='noopener noreferrer'>submit a bug report</a>.</p>";
+      const msg = this.el("div", "ult-message assistant", errorHtml);
+      group.appendChild(msg);
+      console.error("Chat error:", e);
+    } finally {
+      this.isStreaming = false;
+      this.abortController = null;
+      this.updateComposerState();
+      this.setUserMessagesEditable(true);
+      this.focusInput();
+    }
+  }
+
+  createMessageGroup(role, messageIndex = null) {
+    if (!this.refs.messages) return null;
+    const { name, logomark } = this.config.branding;
+    const group = this.el("div", "ult-message-group");
+    group.dataset.role = role;
+    if (messageIndex !== null) group.dataset.messageIndex = messageIndex;
+    const label = this.el(
+      "div",
+      "ult-message-label",
+      role === "assistant"
+        ? `<img src="${this.escapeHtml(logomark)}" alt="${this.escapeHtml(name)}" /><span>${this.escapeHtml(name)}</span>`
+        : `<span class="ult-user-icon"><svg width="29" height="29" viewBox="0 0 24 24"><path fill="currentColor" d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg></span><span>You</span>`,
+    );
+    group.appendChild(label);
+    this.refs.messages.appendChild(group);
+    this.scrollToBottom();
+    return group;
+  }
+
+  addMessageToUI(role, content, messageIndex = null) {
+    const group = this.createMessageGroup(role, messageIndex);
+    if (!group) return null;
+    const div = this.el("div", `ult-message ${role === "assistant" ? "assistant" : ""}`, this.renderMarkdown(content));
+    if (role === "user") {
+      div.contentEditable = "true";
+      div.dataset.originalContent = content;
+      div.setAttribute("role", "textbox");
+      div.setAttribute("aria-label", "Edit your message");
+      div.setAttribute("aria-multiline", "true");
+      if (this.isStreaming) div.contentEditable = "false";
+    }
+    group.appendChild(div);
+    if (role === "assistant") this.finalizeAssistantMessage(group);
+    else this.addUserMessageActions(group);
+    return div;
+  }
+
+  addMessageActions(group) {
+    if (group.querySelector(".ult-message-actions")) return;
+    const feedbackActions = this.config.analytics
+      ? `<button class="ult-icon-btn" data-action="like" aria-label="Good response" data-tooltip="Good response">${this.icon("like")}</button><button class="ult-icon-btn" data-action="dislike" aria-label="Bad response" data-tooltip="Bad response">${this.icon("dislike")}</button>`
+      : "";
+    const actions = this.el(
+      "div",
+      "ult-message-actions",
+      `<button class="ult-icon-btn" data-action="copy" aria-label="Copy response" data-tooltip="Copy response">${this.icon("copy")}</button>${feedbackActions}<button class="ult-icon-btn" data-action="retry" aria-label="Try again" data-tooltip="Try again">${this.icon("refresh")}</button>`,
+    );
+    group.appendChild(actions);
+  }
+
+  addUserMessageActions(group) {
+    if (group.querySelector(".ult-user-message-actions")) return;
+    const actions = this.el(
+      "div",
+      "ult-user-message-actions",
+      `<button class="ult-chat-send ult-chat-edit-btn" data-action="edit" aria-label="Edit and restart" data-tooltip="Edit and restart"><span class="ult-icon-swap" data-icon="arrowUp">${this.icon("arrowUp")}</span></button>`,
+    );
+    group.appendChild(actions);
+  }
+
+  finalizeAssistantMessage(group) {
+    if (!group || group.dataset.role !== "assistant") return;
+    const messageDiv = group.querySelector(".ult-message.assistant");
+    if (messageDiv) this.highlight(messageDiv);
+    this.addMessageActions(group);
+  }
+
+  escapeHtml(text) {
+    const d = this.el("div");
+    d.textContent = text;
+    return d.innerHTML;
+  }
+
+  renderMarkdown(src, skipCopyButtons = false) {
+    const esc = (s) =>
+      s
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    const lines = (src || "").replace(/\r\n?/g, "\n").split("\n");
+    let html = "",
+      inCode = false,
+      codeIndent = 0,
+      listType = null,
+      listOpen = false,
+      inQuote = false,
+      paraOpen = false,
+      inTable = false;
+    const closePara = () => {
+      if (paraOpen) {
+        html += "</p>";
+        paraOpen = false;
+      }
+    };
+    const openPara = () => {
+      if (!paraOpen) {
+        html += "<p>";
+        paraOpen = true;
+      }
+    };
+    const closeList = () => {
+      if (listOpen) {
+        html += listType === "ol" ? "</ol>" : "</ul>";
+        listOpen = false;
+        listType = null;
+      }
+    };
+    const closeQuote = () => {
+      if (inQuote) {
+        html += "</blockquote>";
+        inQuote = false;
+      }
+    };
+    const closeTable = () => {
+      if (inTable) {
+        html += "</tbody></table></div>";
+        inTable = false;
+      }
+    };
+    for (let raw of lines) {
+      const fence = raw.match(/^\s*```(\w+)?\s*$/);
+      if (fence) {
+        if (inCode) {
+          html += skipCopyButtons
+            ? "</code></pre></div>"
+            : `</code></pre><button class="ult-code-copy" aria-label="Copy code" data-tooltip="Copy code">${this.icon("copy")}</button></div>`;
+          inCode = false;
+          codeIndent = 0;
+        } else {
+          closePara();
+          closeList();
+          closeQuote();
+          inCode = true;
+          codeIndent = raw.search(/\S/);
+          html += `<div class="ult-code-block"><pre><code class="lang-${esc(fence[1] || "")}">`;
+        }
+        continue;
+      }
+      if (inCode) {
+        const stripped = raw.slice(codeIndent);
+        html += `${esc(stripped)}\n`;
+        continue;
+      }
+      const q = /^>\s?(.*)$/.exec(raw);
+      if (q) {
+        if (!inQuote) {
+          closePara();
+          closeList();
+          html += "<blockquote>";
+          inQuote = true;
+        }
+        raw = q[1];
+      } else closeQuote();
+      const unorderedListMatch = raw.match(/^\s*([-*+])\s+(.+)$/);
+      if (unorderedListMatch) {
+        if (!listOpen || listType !== "ul") {
+          closePara();
+          closeList();
+          html += "<ul>";
+          listOpen = true;
+          listType = "ul";
+        }
+        html += `<li>${this.renderInline(unorderedListMatch[2])}</li>`;
+        continue;
+      }
+      const orderedListMatch = raw.match(/^\s*(\d+)\.\s+(.+)$/);
+      if (orderedListMatch) {
+        if (!listOpen || listType !== "ol") {
+          closePara();
+          closeList();
+          html += "<ol>";
+          listOpen = true;
+          listType = "ol";
+        }
+        html += `<li>${this.renderInline(orderedListMatch[2])}</li>`;
+        continue;
+      }
+      // Table row: | cell | cell |
+      const tableMatch = raw.match(/^\|(.+)\|$/);
+      if (tableMatch) {
+        const cells = tableMatch[1].split("|").map((c) => c.trim());
+        // Skip separator rows like |---|---|
+        if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
+        if (!inTable) {
+          closePara();
+          closeList();
+          closeQuote();
+          html += `<div class="ult-table-wrap"><table><thead><tr>${cells.map((c) => `<th>${this.renderInline(c)}</th>`).join("")}</tr></thead><tbody>`;
+          inTable = true;
+        } else {
+          html += `<tr>${cells.map((c) => `<td>${this.renderInline(c)}</td>`).join("")}</tr>`;
+        }
+        continue;
+      }
+      closeTable();
+      if (/^\s*$/.test(raw)) {
+        closePara();
+        closeList();
+        closeQuote();
+        continue;
+      }
+      const h3Match = raw.match(/^###\s+(.+)$/);
+      if (h3Match) {
+        closePara();
+        closeList();
+        closeQuote();
+        html += `<h3>${this.renderInline(h3Match[1])}</h3>`;
+        continue;
+      }
+      const h2Match = raw.match(/^##\s+(.+)$/);
+      if (h2Match) {
+        closePara();
+        closeList();
+        closeQuote();
+        html += `<h2>${this.renderInline(h2Match[1])}</h2>`;
+        continue;
+      }
+      const h1Match = raw.match(/^#\s+(.+)$/);
+      if (h1Match) {
+        closePara();
+        closeList();
+        closeQuote();
+        html += `<h1>${this.renderInline(h1Match[1])}</h1>`;
+        continue;
+      }
+      openPara();
+      html += this.renderInline(raw);
+    }
+    closePara();
+    closeList();
+    closeQuote();
+    closeTable();
+    return html;
+  }
+
+  renderInline(text) {
+    if (!text) return "";
+    text = this.escapeHtml(text);
+    const codeBlocks = [];
+    text = text.replace(/`([^`]+)`/g, (_match, code) => {
+      codeBlocks.push(code);
+      return `@@ULTCODE${codeBlocks.length - 1}@@`;
+    });
+    const escUrl = (u) => u.replace(/"/g, "&quot;");
+    text = text.replace(
+      /\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g,
+      (_, label, url) => `<a href="${escUrl(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`,
+    );
+    text = text.replace(
+      /(?<!href=")(?<!src=")(?<!>)\b(https?:\/\/[^\s<>'")\]]+?)(?=[.,;:!?]*(?:\s|<|'|"|\)|]|$))/g,
+      (url) => `<a href="${escUrl(url)}" target="_blank" rel="noopener noreferrer">${url}</a>`,
+    );
+    text = text.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+    text = text.replace(/__(.+?)__/g, "<strong>$1</strong>");
+    text = text.replace(/(?<!\*)\*(?!\*)(.+?)\*(?!\*)/g, "<em>$1</em>");
+    text = text.replace(/(?<!_)_(?!_)(.+?)_(?!_)/g, "<em>$1</em>");
+    text = text.replace(/@@ULTCODE(\d+)@@/g, (_match, idx) => `<code>${codeBlocks[idx]}</code>`);
+    return text.replace(/ {2}\n/g, "<br>");
+  }
+}
+
+// Export to globalThis for compatibility with module bundlers and various JS environments
+if (typeof globalThis !== "undefined" && !globalThis.UltralyticsChat) {
+  globalThis.UltralyticsChat = UltralyticsChat;
+}
