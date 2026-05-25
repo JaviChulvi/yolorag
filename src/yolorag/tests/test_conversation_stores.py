@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from asyncio import run
 import unittest
 
 from sqlalchemy import create_engine, select
@@ -68,6 +69,24 @@ class ConversationLoggerTests(unittest.TestCase):
                 "postgresql",
             )
 
+    def test_transcript_write_failure_logs_concise_warning_once(self) -> None:
+        from yolorag.core import transcripts
+
+        transcripts._warned_transcript_write_failure_providers.clear()
+        logger = FailingConversationLogger()
+        try:
+            with self.assertLogs("yolorag.core.transcripts", level="WARNING") as captured:
+                run(transcripts._append_transcript_messages(logger, [_messages()[0]]))
+                run(transcripts._append_transcript_messages(logger, [_messages()[1]]))
+        finally:
+            transcripts._warned_transcript_write_failure_providers.clear()
+
+        self.assertEqual(logger.calls, 2)
+        self.assertEqual(len(captured.output), 1)
+        self.assertIn("continuing without transcript persistence", captured.output[0])
+        self.assertIn("TLS handshake failed", captured.output[0])
+        self.assertNotIn("Traceback", "\n".join(captured.output))
+
 
 def _messages() -> list[ConversationMessageLog]:
     return [
@@ -117,6 +136,17 @@ class FakeMongoClient:
         if name not in self.databases:
             self.databases[name] = FakeMongoDatabase()
         return self.databases[name]
+
+
+class FailingConversationLogger:
+    provider_name = "mongodb"
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def append_messages(self, messages: list[ConversationMessageLog]) -> None:
+        self.calls += 1
+        raise RuntimeError("TLS handshake failed")
 
 
 if __name__ == "__main__":

@@ -316,15 +316,6 @@ export default function App() {
           ))}
         </nav>
 
-        <button
-          className={`eval-page-button ${activePage === "eval" ? "is-active" : ""}`}
-          type="button"
-          onClick={() => setActivePage("eval")}
-        >
-          <span>Eval</span>
-          <small>Fast timing lab</small>
-        </button>
-
         <div className="fast-widget-status">
           <div className="fast-widget-heading">
             <Zap size={15} aria-hidden="true" />
@@ -332,6 +323,20 @@ export default function App() {
           </div>
           <LLMWidget runtimeSelection={runtimeSelection} />
         </div>
+
+        <button
+          className={`eval-page-button ${activePage === "eval" ? "is-active" : ""}`}
+          type="button"
+          onClick={() => setActivePage("eval")}
+        >
+          <span className="eval-page-button-icon" aria-hidden="true">
+            <Play size={16} />
+          </span>
+          <span className="eval-page-button-copy">
+            <strong>Open eval</strong>
+            <small>Fast timing lab</small>
+          </span>
+        </button>
       </aside>
 
       {activePage === "eval" ? (

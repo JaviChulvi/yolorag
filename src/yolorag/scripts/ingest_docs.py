@@ -15,7 +15,7 @@ from yolorag.knowledge.factory import build_knowledge_store
 from yolorag.knowledge.pipeline import build_docs_records, ingest_records, summarize_records
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def main() -> int:

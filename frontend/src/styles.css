@@ -253,34 +253,69 @@ button {
 
 .eval-page-button {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 2px 8px;
+  grid-template-columns: 36px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
   width: 100%;
-  min-height: 52px;
-  border: 1px solid var(--line);
+  min-height: 60px;
+  border: 1px solid rgba(215, 255, 47, 0.7);
   border-radius: 8px;
-  background: var(--elevated);
-  color: var(--ink);
-  padding: 9px 10px;
+  background: linear-gradient(135deg, var(--ultra-lime), #7dfc8a);
+  color: #07100d;
+  padding: 10px;
   text-align: left;
+  box-shadow: 0 14px 36px rgba(215, 255, 47, 0.16);
+  transition:
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
 }
 
 .eval-page-button:hover,
 .eval-page-button.is-active {
-  border-color: rgba(47, 107, 255, 0.38);
-  background: rgba(47, 107, 255, 0.12);
+  border-color: rgba(34, 211, 238, 0.8);
+  background: linear-gradient(135deg, #d7ff2f, #22d3ee);
+  box-shadow:
+    0 16px 42px rgba(34, 211, 238, 0.18),
+    0 0 0 1px rgba(255, 255, 255, 0.14) inset;
+  transform: translateY(-1px);
 }
 
-.eval-page-button span {
-  font-size: 0.86rem;
-  font-weight: 700;
+.eval-page-button:focus-visible {
+  outline: none;
+  box-shadow:
+    0 0 0 3px rgba(215, 255, 47, 0.32),
+    0 16px 42px rgba(215, 255, 47, 0.18);
 }
 
-.eval-page-button small {
-  grid-column: 1 / -1;
-  color: var(--muted);
+.eval-page-button-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(7, 16, 13, 0.14);
+  border-radius: 8px;
+  background: rgba(7, 16, 13, 0.12);
+  color: #07100d;
+}
+
+.eval-page-button-copy {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.eval-page-button-copy strong {
+  color: #07100d;
+  font-size: 0.9rem;
+  font-weight: 800;
+  line-height: 1.1;
+}
+
+.eval-page-button-copy small {
+  color: rgba(7, 16, 13, 0.66);
   font-size: 0.75rem;
-  font-weight: 500;
+  font-weight: 650;
 }
 
 .chat-panel {

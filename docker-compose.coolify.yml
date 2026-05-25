@@ -1,6 +1,8 @@
 services:
   postgres:
-    image: pgvector/pgvector:pg17
+    build:
+      context: .
+      dockerfile: Dockerfile.postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-yolorag}
@@ -8,7 +10,6 @@ services:
       POSTGRES_PASSWORD: ${SERVICE_PASSWORD_POSTGRES}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-      - ./deploy/postgres/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 10s
@@ -48,10 +49,11 @@ services:
       YOLORAG_RERANK_MODEL: ${YOLORAG_RERANK_MODEL:-rerank-2.5-lite}
       YOLORAG_CHAT_VECTOR_TOP_K: ${YOLORAG_CHAT_VECTOR_TOP_K:-2}
       YOLORAG_RETRIEVAL_MIN_SCORE: ${YOLORAG_RETRIEVAL_MIN_SCORE:-0.50}
+      YOLORAG_FAST_TOOL_TIMEOUT_SECONDS: ${YOLORAG_FAST_TOOL_TIMEOUT_SECONDS:-8}
+      YOLORAG_FAST_RERANK_CANDIDATE_LIMIT: ${YOLORAG_FAST_RERANK_CANDIDATE_LIMIT:-16}
       YOLORAG_RERANK_CANDIDATE_LIMIT: ${YOLORAG_RERANK_CANDIDATE_LIMIT:-}
-      YOLORAG_DEEP_MAX_STEPS: ${YOLORAG_DEEP_MAX_STEPS:-6}
+      YOLORAG_DEEP_MAX_STEPS: ${YOLORAG_DEEP_MAX_STEPS:-100}
       YOLORAG_DEEP_TOOL_TIMEOUT_SECONDS: ${YOLORAG_DEEP_TOOL_TIMEOUT_SECONDS:-20}
-      YOLORAG_MCP_SERVERS: ${YOLORAG_MCP_SERVERS:-}
       GITHUB_MCP_TOKEN: ${GITHUB_MCP_TOKEN:-}
       YOLORAG_CORS_ORIGINS: ${YOLORAG_CORS_ORIGINS:-}
     depends_on:

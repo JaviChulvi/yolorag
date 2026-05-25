@@ -46,6 +46,7 @@ class OpenAIProvider:
         first_choice = raw.choices[0] if raw.choices else None
         message = first_choice.message if first_choice else None
         content = message.content if message and message.content else ""
+        message_payload = _first_choice_message_payload(raw_dict)
         tool_calls = [
             call.model_dump()
             for call in getattr(message, "tool_calls", []) or []
@@ -60,6 +61,7 @@ class OpenAIProvider:
             latency_ms=int((time.perf_counter() - started) * 1000),
             raw_response=raw_dict,
             tool_calls=tool_calls,
+            reasoning_content=_extract_reasoning_content(message, message_payload),
         )
 
     async def _streaming_complete(self, request: LLMRequest) -> LLMResponse:
@@ -183,6 +185,37 @@ def _normalized_model_name(model: str) -> str:
     if lowered.startswith("ft:"):
         return lowered.split(":", 1)[1]
     return lowered
+
+
+def _first_choice_message_payload(raw: dict) -> dict:
+    choices = raw.get("choices") or []
+    if not choices:
+        return {}
+    message = choices[0].get("message") or {}
+    return message if isinstance(message, dict) else {}
+
+
+def _extract_reasoning_content(message, message_payload: dict) -> str | None:
+    if "reasoning_content" in message_payload:
+        return _string_or_empty(message_payload["reasoning_content"])
+
+    model_extra = getattr(message, "model_extra", None) or {}
+    if "reasoning_content" in model_extra:
+        return _string_or_empty(model_extra["reasoning_content"])
+
+    missing = object()
+    value = getattr(message, "reasoning_content", missing)
+    if value is missing:
+        return None
+    return _string_or_empty(value)
+
+
+def _string_or_empty(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    return str(value)
 
 
 def _elapsed_ms(started: float) -> int:

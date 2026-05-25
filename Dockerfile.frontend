@@ -8,7 +8,6 @@ RUN npm ci
 
 WORKDIR /app
 COPY frontend ./frontend
-COPY evals ./evals
 
 WORKDIR /app/frontend
 RUN npm run build

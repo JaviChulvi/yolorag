@@ -18,8 +18,8 @@ from yolorag.retrieval.mongodb import MongoReranker, MongoVectorRetriever
 from yolorag.runtime import build_runtime
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_QUESTIONS_PATH = REPO_ROOT / "evals" / "profile_questions.json"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+DEFAULT_QUESTIONS_PATH = REPO_ROOT / "frontend" / "src" / "evals" / "profile_questions.json"
 DEFAULT_RUNS_DIR = REPO_ROOT / "evals" / "runs"
 
 

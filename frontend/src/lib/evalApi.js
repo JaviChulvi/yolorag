@@ -1,4 +1,4 @@
-import profileQuestions from "../../../evals/profile_questions.json";
+import profileQuestions from "../evals/profile_questions.json";
 import { DEFAULT_RUNTIME_SELECTION, config, runtimeUrl } from "./config.js";
 
 const DEFAULT_BATCH_SIZE = 5;
@@ -19,7 +19,7 @@ export async function runFastEvals({
   }));
   const dataset = {
     name: "profile_questions.json",
-    path: "evals/profile_questions.json",
+    path: "frontend/src/evals/profile_questions.json",
     question_count: questions.length,
   };
   const runId = randomRunId();

@@ -6,6 +6,7 @@ from unittest.mock import patch
 
 from yolorag.tools.mcp import (
     MCPServerConfig,
+    MCPToolProvider,
     _parse_server_configs,
     _repo_scoped_arguments,
     _should_expose_tool,
@@ -13,6 +14,63 @@ from yolorag.tools.mcp import (
 
 
 class MCPServerConfigTests(unittest.TestCase):
+    def test_default_github_mcp_config_comes_from_token_env(self) -> None:
+        with patch.dict(os.environ, {"GITHUB_MCP_TOKEN": "test-token"}, clear=True):
+            provider = MCPToolProvider.from_env()
+
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(len(provider.servers), 1)
+        config = provider.servers[0]
+        self.assertEqual(config.name, "github")
+        self.assertEqual(config.transport, "streamable_http")
+        self.assertEqual(config.url, "https://api.githubcopilot.com/mcp/")
+        self.assertEqual(config.headers["Authorization"], "Bearer test-token")
+        self.assertEqual(config.headers["X-MCP-Toolsets"], "repos,issues,pull_requests,actions")
+        self.assertEqual(config.headers["X-MCP-Readonly"], "true")
+        self.assertEqual(config.allowed_repositories, ("ultralytics/ultralytics",))
+
+    def test_invalid_custom_mcp_json_falls_back_to_default_github_config(self) -> None:
+        from yolorag.tools import mcp
+
+        mcp._warned_invalid_env_values.clear()
+        try:
+            with patch.dict(
+                os.environ,
+                {
+                    "GITHUB_MCP_TOKEN": "test-token",
+                    "YOLORAG_MCP_SERVERS": "[{name:\"github\"}]",
+                },
+                clear=True,
+            ):
+                provider = MCPToolProvider.from_env()
+        finally:
+            mcp._warned_invalid_env_values.clear()
+
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(len(provider.servers), 1)
+        self.assertEqual(provider.servers[0].name, "github")
+        self.assertEqual(provider.servers[0].headers["Authorization"], "Bearer test-token")
+
+    def test_valid_custom_mcp_json_overrides_default_github_config(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "GITHUB_MCP_TOKEN": "test-token",
+                "YOLORAG_MCP_SERVERS": '{"local":{"command":"uvx","args":["example"]}}',
+            },
+            clear=True,
+        ):
+            provider = MCPToolProvider.from_env()
+
+        self.assertIsNotNone(provider)
+        assert provider is not None
+        self.assertEqual(len(provider.servers), 1)
+        self.assertEqual(provider.servers[0].name, "local")
+        self.assertEqual(provider.servers[0].transport, "stdio")
+        self.assertEqual(provider.servers[0].command, "uvx")
+
     def test_parses_streamable_http_server_config(self) -> None:
         with patch.dict(os.environ, {"GITHUB_MCP_TOKEN": "test-token"}):
             configs = _parse_server_configs(

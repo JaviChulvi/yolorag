@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from asyncio import run
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from yolorag.config.model_defaults import default_model_for, model_matrix
 from yolorag.providers.base import LLMRequest
@@ -42,7 +44,8 @@ class ModelSelectionTests(unittest.TestCase):
             self.assertEqual(_resolve_model("deepseek", "deep"), "custom-deepseek")
 
     def test_model_resolution_normalizes_provider_name(self) -> None:
-        self.assertEqual(_resolve_model(" OpenAI ", "fast"), "gpt-5.4-mini")
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(_resolve_model(" OpenAI ", "fast"), "gpt-5.4-mini")
 
 
 class ProviderFactoryTests(unittest.TestCase):
@@ -201,6 +204,58 @@ class ProviderRequestOptionTests(unittest.TestCase):
         self.assertEqual(kwargs["reasoning_effort"], "high")
         self.assertEqual(kwargs["extra_body"], {"thinking": {"type": "enabled"}})
         self.assertNotIn("temperature", kwargs)
+
+    def test_deepseek_preserves_reasoning_content_from_tool_response(self) -> None:
+        provider = DeepSeekProvider(api_key="test-key")
+        tool_call_payload = {
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "docs_search", "arguments": '{"query": "export"}'},
+        }
+        raw_payload = {
+            "choices": [
+                {
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "reasoning_content": "I should search the docs.",
+                        "tool_calls": [tool_call_payload],
+                    }
+                }
+            ],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+        raw_response = SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="",
+                        tool_calls=[
+                            SimpleNamespace(model_dump=lambda: tool_call_payload)
+                        ],
+                    )
+                )
+            ],
+            model_dump=lambda: raw_payload,
+        )
+
+        with patch.object(
+            provider.client.chat.completions,
+            "create",
+            new=AsyncMock(return_value=raw_response),
+        ):
+            response = run(
+                provider.complete(
+                    LLMRequest(
+                        messages=[{"role": "user", "content": "how do I export?"}],
+                        model="deepseek-v4-pro",
+                        mode="deep",
+                    )
+                )
+            )
+
+        self.assertEqual(response.reasoning_content, "I should search the docs.")
+        self.assertEqual(response.tool_calls, [tool_call_payload])
 
 
 if __name__ == "__main__":

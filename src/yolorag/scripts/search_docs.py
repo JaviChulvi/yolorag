@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from yolorag.knowledge.factory import build_knowledge_store
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def main() -> int:

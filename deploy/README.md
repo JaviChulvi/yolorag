@@ -12,7 +12,7 @@ This deployment runs the demo with both retrieval providers available:
 Export the current local pgvector embeddings:
 
 ```bash
-PYTHONPATH=src python scripts/export_postgres_seed.py
+PYTHONPATH=src python -m yolorag.scripts.export_postgres_seed
 ```
 
 Start the stack:
@@ -71,13 +71,36 @@ Optional runtime knobs:
 YOLORAG_API_PROVIDER=deepseek
 YOLORAG_KNOWLEDGE_PROVIDER=mongodb
 YOLORAG_RETRIEVAL_MIN_SCORE=0.50
-YOLORAG_MCP_SERVERS=
+YOLORAG_FAST_TOOL_TIMEOUT_SECONDS=8
+YOLORAG_FAST_RERANK_CANDIDATE_LIMIT=16
+GITHUB_MCP_TOKEN=
 ```
+
+The fast timeout bounds hidden docs-search calls. If MongoDB Atlas vector search
+or reranking is slower than the timeout, the backend falls back to an LLM-only
+answer and the eval page reports a retrieval error with zero returned docs.
+
+Set `GITHUB_MCP_TOKEN` to enable the built-in hosted GitHub MCP tools in the
+deep agent:
+
+```env
+GITHUB_MCP_TOKEN=<github-token>
+```
+
+The hosted GitHub MCP server URL, read-only headers, toolsets, and
+`ultralytics/ultralytics` repository allowlist are configured in code. The
+allowlist is enforced by the app before GitHub tool calls leave the backend.
 
 `YOLORAG_POSTGRES_DSN` is set by the compose file to the internal `postgres`
 service. The frontend selector can still switch requests between `mongodb` and
 `postgresql` at runtime.
 
+The Postgres service builds from `Dockerfile.postgres`, which copies
+`deploy/postgres/init/` into `/docker-entrypoint-initdb.d/` inside the image.
+This avoids relying on a Coolify bind mount for the seed files.
+
 Postgres init scripts run only when the database volume is empty. To refresh the
 seed in an existing Coolify volume, either recreate the volume or import the SQL
-dump manually into Postgres.
+dump manually into Postgres. If `/docker-entrypoint-initdb.d` is empty inside
+the deployed Postgres container, the deployment is still running the old
+bind-mount setup or was built without the seed file in the Docker context.

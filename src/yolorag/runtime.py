@@ -25,7 +25,8 @@ from yolorag.tools.factory import build_tool_router
 
 DEFAULT_CHAT_VECTOR_TOP_K = 2
 DEFAULT_RETRIEVAL_MIN_SCORE = 0.5
-DEFAULT_DEEP_MAX_STEPS = 6
+DEFAULT_FAST_RERANK_CANDIDATE_LIMIT = 16
+DEFAULT_DEEP_MAX_STEPS = 100
 DEFAULT_DEEP_TOOL_TIMEOUT_SECONDS = 20.0
 
 
@@ -121,7 +122,10 @@ def build_runtime(
         mode=selected_mode,
     )
     provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
-    retriever = _build_retriever(knowledge_provider=knowledge_provider)
+    retriever = _build_retriever(
+        knowledge_provider=knowledge_provider,
+        mode=selected_mode,
+    )
 
     return YoloRAGRuntime(
         orchestrator=RAGOrchestrator(
@@ -148,7 +152,10 @@ def build_runtime(
                 docs_default_top_k=FAST_DOCS_TOP_K,
                 docs_max_top_k=FAST_DOCS_TOP_K,
             ),
-            fast_tool_timeout_seconds=FAST_TOOL_TIMEOUT_SECONDS,
+            fast_tool_timeout_seconds=_env_float(
+                "YOLORAG_FAST_TOOL_TIMEOUT_SECONDS",
+                default=FAST_TOOL_TIMEOUT_SECONDS,
+            ),
         ),
         mode=selected_mode,
     )
@@ -163,7 +170,7 @@ def build_deep_runtime(
     selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "deepseek")
     selected_model = _resolve_model(selected_provider, "deep")
     provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
-    retriever = _build_retriever(knowledge_provider=knowledge_provider)
+    retriever = _build_retriever(knowledge_provider=knowledge_provider, mode="deep")
 
     return YoloRAGAgentRuntime(
         orchestrator=DeepAgentOrchestrator(
@@ -215,17 +222,32 @@ def _resolve_mode(mode: str | ResponseMode) -> ResponseMode:
     raise ValueError(f"Unsupported response mode {mode!r}.")
 
 
-def _build_retriever(knowledge_provider: str | None = None) -> Retriever | None:
+def _build_retriever(
+    knowledge_provider: str | None = None,
+    mode: ResponseMode | None = None,
+) -> Retriever | None:
     store = build_knowledge_store(knowledge_provider)
     return MongoVectorRetriever(
         store=store,
         reranker=_build_reranker(),
-        candidate_limit=_env_int_or_none("YOLORAG_RERANK_CANDIDATE_LIMIT"),
+        candidate_limit=_rerank_candidate_limit(mode),
     )
 
 
 def _build_reranker() -> MongoReranker:
     return MongoReranker.from_env()
+
+
+def _rerank_candidate_limit(mode: ResponseMode | None) -> int | None:
+    configured = _env_int_or_none("YOLORAG_RERANK_CANDIDATE_LIMIT")
+    if configured is not None:
+        return configured
+    if mode == "fast":
+        return _env_int(
+            "YOLORAG_FAST_RERANK_CANDIDATE_LIMIT",
+            default=DEFAULT_FAST_RERANK_CANDIDATE_LIMIT,
+        )
+    return None
 
 
 def _env_int(name: str, default: int) -> int:

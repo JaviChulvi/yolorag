@@ -70,7 +70,7 @@ PYTHONPATH=src uvicorn yolorag.api.app:app --reload --host 127.0.0.1 --port 8000
 Run backend tests:
 
 ```bash
-PYTHONPATH=src python3 -m unittest discover -s tests
+PYTHONPATH=src python3 -m unittest discover -s src/yolorag/tests
 ```
 
 Run the frontend:

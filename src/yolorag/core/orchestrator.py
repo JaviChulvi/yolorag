@@ -55,7 +55,7 @@ small talk, generic reasoning, or when the answer is already clear from the
 conversation. If no tool is needed, reply exactly: NO_TOOL
 """
 
-FAST_TOOL_TIMEOUT_SECONDS = 4.0
+FAST_TOOL_TIMEOUT_SECONDS = 8.0
 FAST_DOCS_TOP_K = 3
 FAST_MAX_TOOL_CALLS = 1
 FAST_TOOL_SELECTION_MAX_TOKENS = 96
@@ -601,7 +601,7 @@ class RAGOrchestrator:
                 planning_response=None,
                 tool_call_count=0,
                 tool_ms=_elapsed_ms(tool_started),
-                tool_error=f"{type(exc).__name__}: {exc}",
+                tool_error=_exception_message(exc),
             )
         if not tool_schemas:
             return FastToolPass(
@@ -631,7 +631,7 @@ class RAGOrchestrator:
                 planning_response=None,
                 tool_call_count=0,
                 tool_ms=_elapsed_ms(tool_started),
-                tool_error=f"{type(exc).__name__}: {exc}",
+                tool_error=_exception_message(exc),
             )
 
         selected_tool_calls = planning_response.tool_calls[: self.fast_max_tool_calls]
@@ -707,6 +707,7 @@ class RAGOrchestrator:
         )
 
     async def _call_fast_tool(self, request: ToolCallRequest) -> ToolCallResult:
+        tool_started = time.perf_counter()
         try:
             if self.tool_router is None:
                 raise ValueError("Fast tools are not configured.")
@@ -715,11 +716,18 @@ class RAGOrchestrator:
                 timeout=self.fast_tool_timeout_seconds,
             )
         except Exception as exc:
+            error = _exception_message(exc)
+            tool_ms = _elapsed_ms(tool_started)
             logger.warning("Fast tool call %s failed.", request.name, exc_info=True)
             return ToolCallResult(
                 name=request.name,
-                output={"error": f"{type(exc).__name__}: {exc}"},
-                error=f"{type(exc).__name__}: {exc}",
+                output={"error": error},
+                error=error,
+                metadata=_failed_tool_metadata(
+                    name=request.name,
+                    error=error,
+                    tool_ms=tool_ms,
+                ),
             )
 
     async def _retrieve_if_needed(
@@ -736,7 +744,7 @@ class RAGOrchestrator:
         try:
             results = await self.retriever.retrieve(user_message, top_k=top_k)
         except Exception as exc:
-            retrieval_error = f"{type(exc).__name__}: {exc}"
+            retrieval_error = _exception_message(exc)
             logger.warning(
                 "Retrieval failed; continuing without retrieved context: %s",
                 retrieval_error,
@@ -989,6 +997,31 @@ def _fast_llm_ms(fast_tool_pass: FastToolPass, final_llm_ms: int) -> int:
     return planning_ms + final_llm_ms
 
 
+def _failed_tool_metadata(
+    *,
+    name: str,
+    error: str,
+    tool_ms: int,
+) -> dict[str, Any]:
+    if name != "docs_search":
+        return {"tool_ms": tool_ms}
+    return {
+        "tool_ms": tool_ms,
+        "retrieval": {
+            "used": True,
+            "document_ids": [],
+            "retrieval_ms": tool_ms,
+            "query_embedding_ms": 0,
+            "vector_search_ms": 0,
+            "rerank_ms": 0,
+            "candidate_count": 0,
+            "returned_count": 0,
+            "reranked": False,
+            "error": error,
+        },
+    }
+
+
 def _tool_retrieval_metrics(result: ToolCallResult) -> dict[str, Any] | None:
     retrieval = result.metadata.get("retrieval")
     if not isinstance(retrieval, dict) or not retrieval.get("used"):
@@ -1013,6 +1046,13 @@ def _int_metric(value: Any) -> int:
         return max(int(value), 0)
     except (TypeError, ValueError):
         return 0
+
+
+def _exception_message(exc: Exception) -> str:
+    detail = str(exc)
+    if not detail:
+        return type(exc).__name__
+    return f"{type(exc).__name__}: {detail}"
 
 
 def _metrics_payload(trace: OrchestrationTrace) -> dict[str, Any]:

@@ -15,7 +15,7 @@ from sqlalchemy.engine import make_url
 from yolorag.knowledge.stores.postgresql import PostgresKnowledgeStoreConfig
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_OUTPUT = REPO_ROOT / "deploy/postgres/init/010_docs_chunks.sql.gz"
 
 

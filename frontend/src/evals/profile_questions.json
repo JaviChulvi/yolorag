@@ -178,5 +178,11 @@
     "question": "Explain how Ultralytics handles model pruning or quantization options.",
     "tags": ["export", "optimization", "quantization"],
     "expected_source_paths": ["en/modes/export.md", "en/integrations/tensorrt.md", "en/guides/model-deployment-practices.md"]
+  },
+  {
+    "id": "profile-031",
+    "question": "Hi, my name is Javi",
+    "tags": ["conversation", "casual"],
+    "expected_source_paths": []
   }
 ]

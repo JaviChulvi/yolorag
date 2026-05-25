@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import unittest
-from asyncio import run
+from asyncio import run, sleep
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -350,6 +350,38 @@ class ChatApiTests(unittest.TestCase):
             timings["retrieval"] + timings["llm"] + timings["orchestration_overhead"],
         )
 
+    def test_fast_chat_metrics_report_timed_out_docs_search_as_retrieval_error(self) -> None:
+        provider = FastToolStreamingProvider()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(
+                provider=provider,
+                model="test-model",
+                tool_router=ToolRouter(tools=[SlowDocsTool()]),
+                fast_tool_timeout_seconds=0.01,
+            )
+        )
+        client = TestClient(create_app(runtime=runtime))
+
+        with self.assertLogs("yolorag.core.orchestrator", level="WARNING"):
+            response = client.post(
+                "/api/chat/fast",
+                json={
+                    "messages": [{"role": "user", "content": "how do I export?"}],
+                    "include_metrics": True,
+                    "analytics": False,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('"type": "metrics"', response.text)
+        metrics = _metrics_from_sse(response.text)
+        self.assertEqual(metrics["retrieval"]["error"], "TimeoutError")
+        self.assertTrue(metrics["retrieval"]["used"])
+        self.assertEqual(metrics["retrieval"]["returned_count"], 0)
+        self.assertEqual(metrics["retrieval"]["document_ids"], [])
+        self.assertGreater(metrics["timings_ms"]["retrieval"], 0)
+        self.assertIn('data: {"content": "Use "}', response.text)
+
     def test_fast_chat_streams_llm_answer_without_direct_retrieval(self) -> None:
         provider = RecordingProvider()
         runtime = YoloRAGRuntime(
@@ -496,6 +528,33 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("data: [DONE]", response.text)
         self.assertEqual(provider.complete_calls, 2)
 
+    def test_deepseek_deep_chat_replays_hidden_reasoning_content_for_tools(self) -> None:
+        provider = DeepSeekToolCallingProvider()
+        deep_runtime = YoloRAGAgentRuntime(
+            orchestrator=DeepAgentOrchestrator(
+                provider=provider,
+                model="deep-model",
+                tool_router=ToolRouter(tools=[FakeDocsTool()]),
+                max_steps=3,
+            )
+        )
+        client = TestClient(create_app(deep_runtime=deep_runtime))
+
+        response = client.post(
+            "/api/chat/deep",
+            json={"messages": [{"role": "user", "content": "how do I export?"}]},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text, "Use yolo export.")
+        assistant_message = provider.requests[1].messages[-2]
+        self.assertEqual(assistant_message["role"], "assistant")
+        self.assertEqual(
+            assistant_message["reasoning_content"],
+            "I should search the docs.",
+        )
+        self.assertNotIn("I should search the docs.", response.text)
+
 
 class StaticRetriever:
     def __init__(self, score: float = 0.9) -> None:
@@ -581,12 +640,21 @@ class CountingDocsTool(FakeDocsTool):
         return await super().call(request)
 
 
+class SlowDocsTool(FakeDocsTool):
+    async def call(self, request: ToolCallRequest) -> ToolCallResult:
+        await sleep(1)
+        return await super().call(request)
+
+
 class ToolCallingProvider(RecordingProvider):
     async def complete(self, request: LLMRequest) -> LLMResponse:
         self.complete_calls += 1
         self.requests.append(request)
+        reasoning_content = None
         if self.complete_calls == 1:
             content = ""
+            if self.provider_name == "deepseek":
+                reasoning_content = "I should search the docs."
             tool_calls = [
                 {
                     "id": "call-1",
@@ -609,7 +677,12 @@ class ToolCallingProvider(RecordingProvider):
             latency_ms=1,
             raw_response={"test": True},
             tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
         )
+
+
+class DeepSeekToolCallingProvider(ToolCallingProvider):
+    provider_name = "deepseek"
 
 
 class FastToolStreamingProvider(RecordingProvider):

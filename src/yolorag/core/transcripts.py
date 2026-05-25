@@ -7,6 +7,7 @@ from yolorag.core.conversation import ConversationLogger, ConversationMessageLog
 
 
 logger = logging.getLogger(__name__)
+_warned_transcript_write_failure_providers: set[str] = set()
 
 
 def schedule_user_message_write(
@@ -74,5 +75,18 @@ async def _append_transcript_messages(
 ) -> None:
     try:
         await asyncio.to_thread(conversation_logger.append_messages, messages)
-    except Exception:
-        logger.warning("Failed to persist chat transcript messages.", exc_info=True)
+    except Exception as exc:
+        provider_name = getattr(conversation_logger, "provider_name", "unknown")
+        if provider_name not in _warned_transcript_write_failure_providers:
+            logger.warning(
+                "Failed to persist chat transcript messages with %s; "
+                "continuing without transcript persistence: %s",
+                provider_name,
+                exc,
+            )
+            _warned_transcript_write_failure_providers.add(provider_name)
+        logger.debug(
+            "Failed to persist chat transcript messages with %s.",
+            provider_name,
+            exc_info=True,
+        )

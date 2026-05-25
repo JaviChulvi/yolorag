@@ -32,6 +32,7 @@ class LLMResponse:
     latency_ms: int
     raw_response: Any
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    reasoning_content: str | None = None
     first_token_latency_ms: int = 0
 
 

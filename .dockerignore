@@ -17,7 +17,6 @@ frontend/dist
 frontend/node_modules
 frontend/.vite
 
-deploy/postgres/init/*.sql.gz
 deploy/postgres/init/*.dump
 deploy/postgres/init/*.backup
 

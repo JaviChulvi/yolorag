@@ -152,7 +152,14 @@ class DeepAgentOrchestrator:
             )
 
             if response.tool_calls:
-                messages.append(_assistant_tool_message(response.content, response.tool_calls))
+                messages.append(
+                    _assistant_tool_message(
+                        response.content,
+                        response.tool_calls,
+                        reasoning_content=response.reasoning_content,
+                        include_reasoning_content=response.provider == "deepseek",
+                    )
+                )
                 for tool_call in response.tool_calls:
                     tool_name, arguments, call_id = _parse_tool_call(tool_call)
                     if not tool_name:
@@ -268,12 +275,21 @@ class DeepAgentOrchestrator:
         return [{"role": "system", "content": DEEP_AGENT_SYSTEM_PROMPT}, *body]
 
 
-def _assistant_tool_message(content: str, tool_calls: list[dict[str, Any]]) -> Message:
-    return {
+def _assistant_tool_message(
+    content: str,
+    tool_calls: list[dict[str, Any]],
+    *,
+    reasoning_content: str | None = None,
+    include_reasoning_content: bool = False,
+) -> Message:
+    message: Message = {
         "role": "assistant",
         "content": content or "",
         "tool_calls": tool_calls,
     }
+    if include_reasoning_content:
+        message["reasoning_content"] = reasoning_content or ""
+    return message
 
 
 def _tool_result_message(call_id: str | None, result: ToolCallResult) -> Message:

@@ -13,6 +13,11 @@ from yolorag.tools.base import ToolCallRequest, ToolCallResult
 
 
 logger = logging.getLogger(__name__)
+_warned_invalid_env_values: set[tuple[str, str]] = set()
+
+DEFAULT_GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
+DEFAULT_GITHUB_MCP_ALLOWED_REPOSITORIES = ("ultralytics/ultralytics",)
+DEFAULT_GITHUB_MCP_TOOLSETS = "repos,issues,pull_requests,actions"
 
 
 @dataclass(frozen=True)
@@ -38,17 +43,12 @@ class MCPToolProvider:
     @classmethod
     def from_env(cls, env_name: str = "YOLORAG_MCP_SERVERS") -> MCPToolProvider | None:
         raw = os.getenv(env_name)
-        if not raw:
-            return None
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            logger.warning("%s must be valid JSON: %s", env_name, exc)
-            return None
+        servers = _custom_server_configs_from_env(raw, env_name=env_name)
+        if servers:
+            return cls(servers)
 
-        servers = _parse_server_configs(data)
+        servers = _default_server_configs_from_env()
         if not servers:
-            logger.warning("%s did not define any MCP servers.", env_name)
             return None
         return cls(servers)
 
@@ -66,7 +66,11 @@ class MCPToolProvider:
                     server.name,
                 )
             except Exception:
-                logger.warning("Failed to discover MCP tools for server %s.", server.name, exc_info=True)
+                logger.warning(
+                    "Failed to discover MCP tools for server %s.",
+                    server.name,
+                    exc_info=True,
+                )
         self._tools = discovered
         return discovered
 
@@ -281,6 +285,48 @@ def _parse_server_configs(data: Any) -> list[MCPServerConfig]:
             )
         )
     return configs
+
+
+def _custom_server_configs_from_env(raw: str | None, *, env_name: str) -> list[MCPServerConfig]:
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        warning_key = (env_name, raw)
+        if warning_key not in _warned_invalid_env_values:
+            logger.warning(
+                "%s must be valid JSON; ignoring custom MCP server config: %s",
+                env_name,
+                exc,
+            )
+            _warned_invalid_env_values.add(warning_key)
+        logger.debug("%s invalid value: %r", env_name, raw)
+        return []
+
+    servers = _parse_server_configs(data)
+    if not servers:
+        logger.warning("%s did not define any MCP servers.", env_name)
+    return servers
+
+
+def _default_server_configs_from_env() -> list[MCPServerConfig]:
+    github_token = os.getenv("GITHUB_MCP_TOKEN") or os.getenv("GITHUB_PERSONAL_ACCESS_TOKEN")
+    if not github_token:
+        return []
+    return [
+        MCPServerConfig(
+            name="github",
+            transport="streamable_http",
+            url=DEFAULT_GITHUB_MCP_URL,
+            headers={
+                "Authorization": f"Bearer {github_token}",
+                "X-MCP-Toolsets": DEFAULT_GITHUB_MCP_TOOLSETS,
+                "X-MCP-Readonly": "true",
+            },
+            allowed_repositories=DEFAULT_GITHUB_MCP_ALLOWED_REPOSITORIES,
+        )
+    ]
 
 
 def _normalize_transport(item: dict[str, Any]) -> str:

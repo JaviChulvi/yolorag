@@ -9,7 +9,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_DB = "yolorag"
 DEFAULT_COLLECTION = "docs_chunks"
 DEFAULT_DOCUMENT_ID = "setup-test"
