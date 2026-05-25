@@ -4,6 +4,7 @@ import json
 import unittest
 from asyncio import run
 from decimal import Decimal
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -119,6 +120,86 @@ class ChatApiTests(unittest.TestCase):
         self.assertIn("data: [DONE]", response.text)
         self.assertEqual(provider.stream_calls, 1)
         self.assertEqual(provider.complete_calls, 0)
+
+    def test_fast_chat_selects_runtime_from_query_params(self) -> None:
+        provider = RecordingProvider()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(provider=provider, model="test-model")
+        )
+        client = TestClient(create_app())
+
+        with patch("yolorag.api.chat.build_runtime", return_value=runtime) as build:
+            response = client.post(
+                "/api/chat/fast?provider=deepseek&knowledge_provider=postgresql",
+                json={"messages": [{"role": "user", "content": "hello"}]},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        build.assert_called_once_with(
+            provider_name="deepseek",
+            mode="fast",
+            knowledge_provider="postgresql",
+            conversation_provider="postgresql",
+        )
+        self.assertEqual(response.headers["X-LLM-Provider"], "deepseek")
+        self.assertEqual(response.headers["X-Knowledge-Provider"], "postgresql")
+        self.assertEqual(response.headers["X-Conversation-Provider"], "postgresql")
+        self.assertEqual(provider.stream_calls, 1)
+
+    def test_fast_chat_defaults_to_deepseek_and_mongodb(self) -> None:
+        provider = RecordingProvider()
+        runtime = YoloRAGRuntime(
+            orchestrator=RAGOrchestrator(provider=provider, model="test-model")
+        )
+        client = TestClient(create_app())
+
+        with patch.dict("os.environ", {}, clear=True):
+            with patch("yolorag.api.chat.build_runtime", return_value=runtime) as build:
+                response = client.post(
+                    "/api/chat/fast",
+                    json={"messages": [{"role": "user", "content": "hello"}]},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        build.assert_called_once_with(
+            provider_name="deepseek",
+            mode="fast",
+            knowledge_provider="mongodb",
+            conversation_provider="mongodb",
+        )
+        self.assertEqual(response.headers["X-LLM-Provider"], "deepseek")
+        self.assertEqual(response.headers["X-Knowledge-Provider"], "mongodb")
+
+    def test_fast_chat_reuses_runtime_cache_per_provider_and_database(self) -> None:
+        client = TestClient(create_app())
+
+        with patch("yolorag.api.chat.build_runtime") as build:
+            build.side_effect = lambda **_: YoloRAGRuntime(
+                orchestrator=RAGOrchestrator(provider=RecordingProvider(), model="test-model")
+            )
+            for provider_name, knowledge_provider in [
+                ("openai", "mongodb"),
+                ("openai", "mongodb"),
+                ("openai", "postgresql"),
+            ]:
+                response = client.post(
+                    f"/api/chat/fast?provider={provider_name}&knowledge_provider={knowledge_provider}",
+                    json={"messages": [{"role": "user", "content": "hello"}]},
+                )
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(build.call_count, 2)
+
+    def test_chat_rejects_unknown_runtime_selector(self) -> None:
+        client = TestClient(create_app())
+
+        response = client.post(
+            "/api/chat/fast?provider=bogus",
+            json={"messages": [{"role": "user", "content": "hello"}]},
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Unsupported provider", response.text)
 
     def test_fast_chat_runs_bounded_tool_pass_then_streams_answer(self) -> None:
         provider = FastToolStreamingProvider()

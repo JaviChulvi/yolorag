@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { config } from "../lib/config.js";
+import { config, runtimeUrl } from "../lib/config.js";
 
-export default function LLMWidget() {
+export default function LLMWidget({ runtimeSelection }) {
   const chatRef = useRef(null);
   const [status, setStatus] = useState("Loading widget");
+  const apiUrl = runtimeUrl(config.chatApiUrl, runtimeSelection);
 
   const widgetConfig = useMemo(
     () => ({
-      apiUrl: config.chatApiUrl,
+      apiUrl,
       analytics: true,
       pageContent: true,
       instructions:
@@ -49,11 +50,12 @@ export default function LLMWidget() {
         text: "#f8fafc",
       },
     }),
-    [],
+    [apiUrl],
   );
 
   useEffect(() => {
     let cancelled = false;
+    setStatus("Loading widget");
 
     loadWidgetScript(config.widgetScriptSrc)
       .then(() => {

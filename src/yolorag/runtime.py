@@ -111,22 +111,27 @@ def build_runtime(
     provider_name: str | None = None,
     mode: ResponseMode | None = None,
     api_base: str | None = None,
+    knowledge_provider: str | None = None,
+    conversation_provider: str | None = None,
 ) -> YoloRAGRuntime:
-    selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "openai")
+    selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "deepseek")
     selected_mode = _resolve_mode(mode or getenv("YOLORAG_API_MODE", "fast"))
     selected_model = _resolve_model(
         provider_name=selected_provider,
         mode=selected_mode,
     )
     provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
-    retriever = _build_retriever()
+    retriever = _build_retriever(knowledge_provider=knowledge_provider)
 
     return YoloRAGRuntime(
         orchestrator=RAGOrchestrator(
             provider=provider,
             model=selected_model,
             retriever=retriever,
-            conversation_logger=build_conversation_logger(),
+            conversation_logger=build_conversation_logger(
+                conversation_provider,
+                knowledge_provider=knowledge_provider,
+            ),
             route_planner=SimpleRoutePlanner(
                 min_relevance_score=_env_float(
                     "YOLORAG_RETRIEVAL_MIN_SCORE",
@@ -152,11 +157,13 @@ def build_runtime(
 def build_deep_runtime(
     provider_name: str | None = None,
     api_base: str | None = None,
+    knowledge_provider: str | None = None,
+    conversation_provider: str | None = None,
 ) -> YoloRAGAgentRuntime:
-    selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "openai")
+    selected_provider = provider_name or getenv("YOLORAG_API_PROVIDER", "deepseek")
     selected_model = _resolve_model(selected_provider, "deep")
     provider = get_llm_provider(provider_name=selected_provider, api_base=api_base)
-    retriever = _build_retriever()
+    retriever = _build_retriever(knowledge_provider=knowledge_provider)
 
     return YoloRAGAgentRuntime(
         orchestrator=DeepAgentOrchestrator(
@@ -169,7 +176,10 @@ def build_deep_runtime(
                     default=DEFAULT_RETRIEVAL_MIN_SCORE,
                 ),
             ),
-            conversation_logger=build_conversation_logger(),
+            conversation_logger=build_conversation_logger(
+                conversation_provider,
+                knowledge_provider=knowledge_provider,
+            ),
             max_steps=_env_int("YOLORAG_DEEP_MAX_STEPS", default=DEFAULT_DEEP_MAX_STEPS),
             tool_timeout_seconds=_env_float(
                 "YOLORAG_DEEP_TOOL_TIMEOUT_SECONDS",
@@ -205,8 +215,8 @@ def _resolve_mode(mode: str | ResponseMode) -> ResponseMode:
     raise ValueError(f"Unsupported response mode {mode!r}.")
 
 
-def _build_retriever() -> Retriever | None:
-    store = build_knowledge_store()
+def _build_retriever(knowledge_provider: str | None = None) -> Retriever | None:
+    store = build_knowledge_store(knowledge_provider)
     return MongoVectorRetriever(
         store=store,
         reranker=MongoReranker.from_env(),

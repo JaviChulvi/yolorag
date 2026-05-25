@@ -58,6 +58,16 @@ class ConversationLoggerTests(unittest.TestCase):
         ):
             self.assertEqual(selected_conversation_provider(), "postgresql")
 
+    def test_conversation_provider_can_follow_request_knowledge_provider(self) -> None:
+        import os
+        from unittest.mock import patch
+
+        with patch.dict(os.environ, {}, clear=True):
+            self.assertEqual(
+                selected_conversation_provider(knowledge_provider="postgresql"),
+                "postgresql",
+            )
+
 
 def _messages() -> list[ConversationMessageLog]:
     return [

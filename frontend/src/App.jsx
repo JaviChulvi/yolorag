@@ -1,10 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  Bot,
+  BrainCircuit,
+  Cpu,
+  Database,
+  Layers3,
+  Play,
+  Sparkles,
+  Zap,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import LLMWidget from "./components/LLMWidget.jsx";
 import { streamDeepAgentChat } from "./lib/chatApi.js";
-import { config } from "./lib/config.js";
+import { DEFAULT_RUNTIME_SELECTION, config, runtimeUrl } from "./lib/config.js";
 import { runFastEvals } from "./lib/evalApi.js";
 
 const STORAGE_KEY = "yolorag.deepAgentConversations.v1";
@@ -14,6 +24,20 @@ const STARTER_MESSAGES = [
   "Trace the deep route for a YOLO export question",
   "Find the docs path for training a custom dataset",
   "Check what the agent would inspect for a GitHub issue",
+];
+const PROVIDER_OPTIONS = [
+  { id: "openai", label: "OpenAI", Icon: Sparkles },
+  { id: "deepseek", label: "DeepSeek", Icon: Cpu },
+];
+const KNOWLEDGE_OPTIONS = [
+  { id: "mongodb", label: "MongoDB", Icon: Database },
+  { id: "postgresql", label: "Postgres", Icon: Layers3 },
+];
+const EVAL_SCOPE_OPTIONS = [
+  { id: "selected", label: "Selected", Icon: Play },
+  { id: "databases", label: "Both DBs", Icon: Database },
+  { id: "providers", label: "Both LLMs", Icon: Bot },
+  { id: "matrix", label: "Matrix", Icon: Layers3 },
 ];
 
 export default function App() {
@@ -29,6 +53,7 @@ export default function App() {
   const [activePage, setActivePage] = useState("chat");
   const [input, setInput] = useState("");
   const [now, setNow] = useState(Date.now());
+  const [runtimeSelection, setRuntimeSelection] = useState(DEFAULT_RUNTIME_SELECTION);
   const requestRef = useRef(null);
   const messagesRef = useRef(null);
   const autoFollowRef = useRef(true);
@@ -45,6 +70,7 @@ export default function App() {
     (message) => message.role === "assistant" && message.status === "working",
   );
   const isWorking = Boolean(activeAssistant);
+  const deepEventsUrl = runtimeUrl(config.deepAgentEventsApiUrl, runtimeSelection);
 
   useEffect(() => {
     const root = document.documentElement;
@@ -134,6 +160,7 @@ export default function App() {
         messages: requestMessages,
         sessionId: activeConversation.sessionId,
         instructions: AGENT_INSTRUCTIONS,
+        runtimeSelection,
         signal: controller.signal,
         onEvent: (agentEvent) => {
           if (agentEvent.type === "done") sawDone = true;
@@ -299,13 +326,19 @@ export default function App() {
         </button>
 
         <div className="fast-widget-status">
-          <span>Fast chat</span>
-          <LLMWidget />
+          <div className="fast-widget-heading">
+            <Zap size={15} aria-hidden="true" />
+            <span>Fast chat</span>
+          </div>
+          <LLMWidget runtimeSelection={runtimeSelection} />
         </div>
       </aside>
 
       {activePage === "eval" ? (
-        <EvalPage />
+        <EvalPage
+          runtimeSelection={runtimeSelection}
+          setRuntimeSelection={setRuntimeSelection}
+        />
       ) : (
         <section className="chat-panel">
         <header className="chat-header">
@@ -314,8 +347,15 @@ export default function App() {
             <h2>{activeConversation?.title || "New deep agent chat"}</h2>
           </div>
           <div className="header-actions">
-            <div className="route-pill">Deep agent events</div>
-            <div className="route-pill muted">{config.deepAgentEventsApiUrl}</div>
+            <RuntimeSelector
+              runtimeSelection={runtimeSelection}
+              setRuntimeSelection={setRuntimeSelection}
+            />
+            <div className="route-pill icon-pill">
+              <BrainCircuit size={14} aria-hidden="true" />
+              Deep events
+            </div>
+            <div className="route-pill muted">{deepEventsUrl}</div>
           </div>
         </header>
 
@@ -390,13 +430,72 @@ export default function App() {
   );
 }
 
-function EvalPage() {
+function RuntimeSelector({ runtimeSelection, setRuntimeSelection }) {
+  return (
+    <div className="runtime-selector">
+      <SegmentedControl
+        ariaLabel="LLM provider"
+        onChange={(provider) =>
+          setRuntimeSelection((current) => ({
+            ...current,
+            provider,
+          }))
+        }
+        options={PROVIDER_OPTIONS}
+        value={runtimeSelection.provider}
+      />
+      <SegmentedControl
+        ariaLabel="Knowledge database"
+        onChange={(knowledgeProvider) =>
+          setRuntimeSelection((current) => ({
+            ...current,
+            knowledgeProvider,
+          }))
+        }
+        options={KNOWLEDGE_OPTIONS}
+        value={runtimeSelection.knowledgeProvider}
+      />
+    </div>
+  );
+}
+
+function SegmentedControl({
+  ariaLabel,
+  className = "",
+  disabled = false,
+  onChange,
+  options,
+  value,
+}) {
+  return (
+    <div className={`segmented-control ${className}`} aria-label={ariaLabel} role="group">
+      {options.map(({ id, label, Icon }) => (
+        <button
+          aria-pressed={value === id}
+          className={value === id ? "is-active" : ""}
+          disabled={disabled}
+          key={id}
+          onClick={() => onChange(id)}
+          title={label}
+          type="button"
+        >
+          <Icon size={14} aria-hidden="true" />
+          <span>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function EvalPage({ runtimeSelection, setRuntimeSelection }) {
   const [result, setResult] = useState(null);
   const [error, setError] = useState("");
   const [startedAt, setStartedAt] = useState(null);
+  const [evalScope, setEvalScope] = useState("selected");
   const [now, setNow] = useState(Date.now());
   const requestRef = useRef(null);
   const isRunning = Boolean(startedAt);
+  const selectedEvalUrl = runtimeUrl(config.chatApiUrl, runtimeSelection);
 
   useEffect(() => {
     if (!isRunning) return undefined;
@@ -415,6 +514,8 @@ function EvalPage() {
     try {
       const nextResult = await runFastEvals({
         signal: controller.signal,
+        runtimeSelection,
+        evalScope,
         onProgress: setResult,
       });
       setResult(nextResult);
@@ -451,20 +552,32 @@ function EvalPage() {
           <h2>Fast endpoint timing</h2>
         </div>
         <div className="header-actions">
+          <RuntimeSelector
+            runtimeSelection={runtimeSelection}
+            setRuntimeSelection={setRuntimeSelection}
+          />
           <div className="route-pill">profile_questions.json</div>
-          <div className="route-pill muted">{config.chatApiUrl}</div>
+          <div className="route-pill muted">{selectedEvalUrl}</div>
         </div>
       </header>
 
       <section className="eval-hero">
         <div className="eval-hero-copy">
           <p className="eval-eyebrow">Real LLM + retrieval run</p>
-          <h3>Run the 30 profile questions through the fast path.</h3>
+          <h3>Run the 30 profile questions through the selected stack.</h3>
           <p>
             Timing only: total wall time, time to first token, LLM completion,
             retrieval, query embedding, vector database search, reranking, and
             orchestration overhead.
           </p>
+          <SegmentedControl
+            ariaLabel="Eval matrix"
+            className="eval-scope-control"
+            disabled={isRunning}
+            onChange={setEvalScope}
+            options={EVAL_SCOPE_OPTIONS}
+            value={evalScope}
+          />
         </div>
         <div className="eval-run-box">
           <div>
@@ -511,6 +624,10 @@ function EvalPage() {
             <strong>{summary.retrieval_error_count}</strong>
           </div>
           <div>
+            <span>Stacks</span>
+            <strong>{result?.run?.combo_count || 1}</strong>
+          </div>
+          <div>
             <span>Estimated cost</span>
             <strong>${summary.total_estimated_cost_usd.toFixed(6)}</strong>
           </div>
@@ -524,6 +641,8 @@ function EvalPage() {
         </section>
       ) : null}
 
+      <EvalComparison result={result} />
+
       <section className="eval-results">
         <div className="eval-results-header">
           <h3>Question timings</h3>
@@ -533,6 +652,7 @@ function EvalPage() {
           <table>
             <thead>
               <tr>
+                <th>Stack</th>
                 <th>Question</th>
                 <th>Total</th>
                 <th>TTFT</th>
@@ -548,11 +668,11 @@ function EvalPage() {
             <tbody>
               {result?.results?.length ? (
                 result.results.map((item) => (
-                  <EvalResultRow item={item} key={item.id} />
+                  <EvalResultRow item={item} key={`${item.combo_id || "selected"}-${item.id}`} />
                 ))
               ) : (
                 <tr>
-                  <td colSpan="10">
+                  <td colSpan="11">
                     {isRunning
                       ? "Question results will appear as each request finishes."
                       : "Run eval to populate timing data."}
@@ -572,6 +692,12 @@ function EvalResultRow({ item }) {
   return (
     <tr className={item.status === "error" ? "is-error" : ""}>
       <td>
+        <div className="eval-stack-cell">
+          <strong>{item.provider || "-"}</strong>
+          <span>{item.knowledge_provider || "-"}</span>
+        </div>
+      </td>
+      <td>
         <div className="eval-question-cell">
           <span>{item.id}</span>
           <strong>{item.question}</strong>
@@ -588,6 +714,82 @@ function EvalResultRow({ item }) {
       <td>{formatDurationValue(timings.orchestration_overhead)}</td>
       <td>{item.retrieval?.returned_count ?? 0}</td>
     </tr>
+  );
+}
+
+function EvalComparison({ result }) {
+  const comparison = useMemo(() => buildEvalComparisons(result), [result]);
+  if (!comparison) return null;
+
+  return (
+    <section className="eval-comparison" aria-label="Eval comparison">
+      <div className="eval-comparison-header">
+        <div>
+          <p className="eval-eyebrow">Stack comparison</p>
+          <h3>Average latency by runtime</h3>
+        </div>
+        <span>{comparison.completedCount} successful calls</span>
+      </div>
+      <div className="eval-comparison-grid">
+        {comparison.stack.length > 1 ? (
+          <EvalComparisonGroup title="Provider + DB" rows={comparison.stack} />
+        ) : null}
+        {comparison.providers.length > 1 ? (
+          <EvalComparisonGroup title="Provider" rows={comparison.providers} />
+        ) : null}
+        {comparison.databases.length > 1 ? (
+          <EvalComparisonGroup title="Database" rows={comparison.databases} />
+        ) : null}
+      </div>
+    </section>
+  );
+}
+
+function EvalComparisonGroup({ title, rows }) {
+  const maxTotal = Math.max(...rows.map((row) => row.averages.total), 1);
+  return (
+    <div className="comparison-group">
+      <div className="comparison-group-title">
+        <h4>{title}</h4>
+        <span>Avg total</span>
+      </div>
+      <div className="comparison-list">
+        {rows.map((row) => (
+          <div className={`comparison-row ${row.rank === 1 ? "is-best" : ""}`} key={row.key}>
+            <div className="comparison-row-top">
+              <div>
+                <strong>{row.label}</strong>
+                <span>
+                  {row.completedCount}/{row.count} ok
+                </span>
+              </div>
+              <time>{formatDurationValue(row.averages.total)}</time>
+            </div>
+            <div className="comparison-bar" aria-hidden="true">
+              <span style={{ width: `${Math.max((row.averages.total / maxTotal) * 100, 4)}%` }} />
+            </div>
+            <div className="comparison-breakdown">
+              <div>
+                <span>TTFT</span>
+                <strong>{formatDurationValue(row.averages.ttft)}</strong>
+              </div>
+              <div>
+                <span>LLM</span>
+                <strong>{formatDurationValue(row.averages.llm)}</strong>
+              </div>
+              <div>
+                <span>Retrieval</span>
+                <strong>{formatDurationValue(row.averages.retrieval)}</strong>
+              </div>
+              <div>
+                <span>Vector</span>
+                <strong>{formatDurationValue(row.averages.vector_search)}</strong>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
   );
 }
 
@@ -824,6 +1026,93 @@ function lastMessagePreview(messages) {
   if (!last) return "Working";
   const content = last.content.replace(/\s+/g, " ").trim();
   return content.length > 42 ? `${content.slice(0, 39)}...` : content;
+}
+
+function buildEvalComparisons(result) {
+  const rows = result?.results || [];
+  const completed = rows.filter((row) => row.status === "ok");
+  if (!completed.length || Number(result?.run?.combo_count || 1) <= 1) return null;
+
+  const stack = comparisonRows(rows, (row) => ({
+    key: row.combo_id || `${row.provider}-${row.knowledge_provider}`,
+    label: row.combo_label || `${providerLabel(row.provider)} / ${databaseLabel(row.knowledge_provider)}`,
+  }));
+  const providers = comparisonRows(rows, (row) => ({
+    key: row.provider || "unknown",
+    label: providerLabel(row.provider),
+  }));
+  const databases = comparisonRows(rows, (row) => ({
+    key: row.knowledge_provider || "unknown",
+    label: databaseLabel(row.knowledge_provider),
+  }));
+
+  return {
+    completedCount: completed.length,
+    stack,
+    providers,
+    databases,
+  };
+}
+
+function comparisonRows(rows, groupForRow) {
+  const groups = new Map();
+  rows.forEach((row) => {
+    const group = groupForRow(row);
+    if (!groups.has(group.key)) {
+      groups.set(group.key, {
+        key: group.key,
+        label: group.label,
+        rows: [],
+      });
+    }
+    groups.get(group.key).rows.push(row);
+  });
+
+  return [...groups.values()]
+    .map((group) => {
+      const completed = group.rows.filter((row) => row.status === "ok");
+      return {
+        key: group.key,
+        label: group.label,
+        count: group.rows.length,
+        completedCount: completed.length,
+        averages: {
+          total: averageMetric(completed, "total"),
+          ttft: averageMetric(completed, "ttft"),
+          llm: averageMetric(completed, "llm"),
+          retrieval: averageMetric(completed, "retrieval"),
+          vector_search: averageMetric(completed, "vector_search"),
+        },
+      };
+    })
+    .filter((group) => group.completedCount > 0)
+    .sort((first, second) => first.averages.total - second.averages.total)
+    .map((group, index) => ({ ...group, rank: index + 1 }));
+}
+
+function averageMetric(rows, metric) {
+  if (!rows.length) return 0;
+  const values = rows.map((row) => numberValue(row.timings_ms?.[metric]));
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function numberValue(value) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function providerLabel(provider) {
+  return {
+    openai: "OpenAI",
+    deepseek: "DeepSeek",
+  }[provider] || provider || "Unknown";
+}
+
+function databaseLabel(database) {
+  return {
+    mongodb: "MongoDB",
+    postgresql: "Postgres",
+  }[database] || database || "Unknown";
 }
 
 function formatShortTime(value) {

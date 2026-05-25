@@ -1,13 +1,14 @@
-import { config } from "./config.js";
+import { config, runtimeUrl } from "./config.js";
 
 export async function streamDeepAgentChat({
   messages,
   sessionId,
   instructions,
+  runtimeSelection,
   signal,
   onEvent,
 }) {
-  const response = await fetch(config.deepAgentEventsApiUrl, {
+  const response = await fetch(runtimeUrl(config.deepAgentEventsApiUrl, runtimeSelection), {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

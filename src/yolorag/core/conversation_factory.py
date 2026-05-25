@@ -11,16 +11,27 @@ from yolorag.core.conversation_stores import (
 from yolorag.knowledge.factory import selected_knowledge_provider
 
 
-def selected_conversation_provider(provider_name: str | None = None) -> str:
+def selected_conversation_provider(
+    provider_name: str | None = None,
+    *,
+    knowledge_provider: str | None = None,
+) -> str:
     return (
         provider_name
         or getenv("YOLORAG_CONVERSATION_PROVIDER")
-        or selected_knowledge_provider()
+        or selected_knowledge_provider(knowledge_provider)
     )
 
 
-def build_conversation_logger(provider_name: str | None = None) -> ConversationLogger:
-    provider = selected_conversation_provider(provider_name)
+def build_conversation_logger(
+    provider_name: str | None = None,
+    *,
+    knowledge_provider: str | None = None,
+) -> ConversationLogger:
+    provider = selected_conversation_provider(
+        provider_name,
+        knowledge_provider=knowledge_provider,
+    )
     if provider == "mongodb":
         return MongoConversationLogger(MongoConversationLoggerConfig.from_env())
     if provider == "postgresql":

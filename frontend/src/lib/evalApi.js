@@ -1,11 +1,15 @@
 import profileQuestions from "../../../evals/profile_questions.json";
-import { config } from "./config.js";
+import { DEFAULT_RUNTIME_SELECTION, config, runtimeUrl } from "./config.js";
 
 const DEFAULT_BATCH_SIZE = 5;
+const PROVIDERS = ["openai", "deepseek"];
+const KNOWLEDGE_PROVIDERS = ["mongodb", "postgresql"];
 
 export async function runFastEvals({
   signal,
   batchSize = DEFAULT_BATCH_SIZE,
+  runtimeSelection = DEFAULT_RUNTIME_SELECTION,
+  evalScope = "selected",
   onProgress,
 } = {}) {
   const questions = profileQuestions.map((item, index) => ({
@@ -21,10 +25,13 @@ export async function runFastEvals({
   const runId = randomRunId();
   const startedAt = new Date().toISOString();
   const started = performance.now();
+  const combos = evalCombos(runtimeSelection, evalScope);
   const run = {
     id: runId,
     mode: "fast",
     endpoint: "/api/chat/fast",
+    eval_scope: evalScope,
+    combo_count: combos.length,
     started_at: startedAt,
     completed_at: null,
     duration_ms: 0,
@@ -33,52 +40,73 @@ export async function runFastEvals({
   const results = [];
   emitProgress();
 
-  for (let index = 0; index < questions.length; index += batchSize) {
-    const batch = questions.slice(index, index + batchSize);
-    await Promise.all(
-      batch.map((item, batchIndex) =>
-        runFastEvalQuestion({
-          item,
-          runId,
-          userMessageIndex: index + batchIndex,
-          signal,
-        }).then((result) => {
-          results.push(result);
-          results.sort((first, second) => first.user_message_index - second.user_message_index);
-          emitProgress();
-          return result;
-        }),
-      ),
-    );
+  for (const combo of combos) {
+    for (let index = 0; index < questions.length; index += batchSize) {
+      const batch = questions.slice(index, index + batchSize);
+      await Promise.all(
+        batch.map((item, batchIndex) =>
+          runFastEvalQuestion({
+            item,
+            combo,
+            runId,
+            userMessageIndex: index + batchIndex,
+            signal,
+          }).then((result) => {
+            results.push(result);
+            results.sort(
+              (first, second) =>
+                first.combo_order - second.combo_order ||
+                first.user_message_index - second.user_message_index,
+            );
+            emitProgress();
+            return result;
+          }),
+        ),
+      );
+    }
   }
 
   run.completed_at = new Date().toISOString();
   run.duration_ms = elapsedMs(started);
-  const report = buildReport({ dataset, run, results, requestedCount: questions.length });
+  const report = buildReport({
+    dataset,
+    run,
+    combos,
+    results,
+    requestedCount: questions.length * combos.length,
+  });
   onProgress?.(report);
   return report;
 
   function emitProgress() {
     run.duration_ms = elapsedMs(started);
-    onProgress?.(buildReport({ dataset, run, results, requestedCount: questions.length }));
+    onProgress?.(
+      buildReport({
+        dataset,
+        run,
+        combos,
+        results,
+        requestedCount: questions.length * combos.length,
+      }),
+    );
   }
 }
 
-async function runFastEvalQuestion({ item, runId, userMessageIndex, signal }) {
+async function runFastEvalQuestion({ item, combo, runId, userMessageIndex, signal }) {
   const started = performance.now();
   let clientTtft = 0;
   let answer = "";
   let metrics = null;
 
   try {
-    const response = await fetch(config.chatApiUrl, {
+    const response = await fetch(runtimeUrl(config.chatApiUrl, combo), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "text/event-stream",
       },
       body: JSON.stringify({
-        session_id: `eval-fast-${runId}-${item.id}`,
+        session_id: `eval-fast-${runId}-${combo.id}-${item.id}`,
         messages: [{ role: "user", content: item.question }],
         analytics: false,
         include_metrics: true,
@@ -108,6 +136,7 @@ async function runFastEvalQuestion({ item, runId, userMessageIndex, signal }) {
     if (!metrics) throw new Error("Fast chat did not return metrics.");
     return successResult({
       item,
+      combo,
       metrics,
       answer,
       started,
@@ -116,7 +145,7 @@ async function runFastEvalQuestion({ item, runId, userMessageIndex, signal }) {
     });
   } catch (error) {
     if (error.name === "AbortError") throw error;
-    return errorResult(item, error, started, userMessageIndex);
+    return errorResult(item, combo, error, started, userMessageIndex);
   }
 }
 
@@ -159,14 +188,26 @@ function parseFrame(frame, onEvent) {
   onEvent(event);
 }
 
-function successResult({ item, metrics, answer, started, clientTtft, userMessageIndex }) {
+function successResult({
+  item,
+  combo,
+  metrics,
+  answer,
+  started,
+  clientTtft,
+  userMessageIndex,
+}) {
   const timings = metrics.timings_ms || {};
   return {
     id: item.id,
     question: item.question,
     tags: item.tags,
     status: "ok",
-    provider: metrics.provider,
+    combo_id: combo.id,
+    combo_label: combo.label,
+    combo_order: combo.order,
+    provider: metrics.provider || combo.provider,
+    knowledge_provider: combo.knowledgeProvider,
     model: metrics.model,
     timings_ms: {
       total: numberValue(timings.total),
@@ -189,7 +230,7 @@ function successResult({ item, metrics, answer, started, clientTtft, userMessage
   };
 }
 
-function errorResult(item, error, started, userMessageIndex) {
+function errorResult(item, combo, error, started, userMessageIndex) {
   const errorName = error?.name || "Error";
   const errorMessage = error?.message || String(error);
   return {
@@ -197,6 +238,11 @@ function errorResult(item, error, started, userMessageIndex) {
     question: item.question,
     tags: item.tags,
     status: "error",
+    combo_id: combo.id,
+    combo_label: combo.label,
+    combo_order: combo.order,
+    provider: combo.provider,
+    knowledge_provider: combo.knowledgeProvider,
     timings_ms: {
       total: elapsedMs(started),
       retrieval: 0,
@@ -217,13 +263,64 @@ function errorResult(item, error, started, userMessageIndex) {
   };
 }
 
-function buildReport({ dataset, run, results, requestedCount }) {
+function buildReport({ dataset, run, combos, results, requestedCount }) {
   return {
     dataset,
     run: { ...run },
+    combos: [...combos],
     summary: summarize(results, requestedCount),
     results: [...results],
   };
+}
+
+function evalCombos(runtimeSelection, evalScope) {
+  const selected = normalizeSelection(runtimeSelection);
+  if (evalScope === "databases") {
+    return KNOWLEDGE_PROVIDERS.map((knowledgeProvider, order) =>
+      combo({ ...selected, knowledgeProvider }, order),
+    );
+  }
+  if (evalScope === "providers") {
+    return PROVIDERS.map((provider, order) => combo({ ...selected, provider }, order));
+  }
+  if (evalScope === "matrix") {
+    return PROVIDERS.flatMap((provider) =>
+      KNOWLEDGE_PROVIDERS.map((knowledgeProvider) => ({ provider, knowledgeProvider })),
+    ).map((selection, order) => combo(selection, order));
+  }
+  return [combo(selected, 0)];
+}
+
+function normalizeSelection(selection = {}) {
+  return {
+    provider: selection.provider || DEFAULT_RUNTIME_SELECTION.provider,
+    knowledgeProvider:
+      selection.knowledgeProvider || DEFAULT_RUNTIME_SELECTION.knowledgeProvider,
+  };
+}
+
+function combo(selection, order) {
+  const normalized = normalizeSelection(selection);
+  return {
+    ...normalized,
+    id: `${normalized.provider}-${normalized.knowledgeProvider}`,
+    label: `${providerLabel(normalized.provider)} / ${knowledgeLabel(normalized.knowledgeProvider)}`,
+    order,
+  };
+}
+
+function providerLabel(provider) {
+  return {
+    openai: "OpenAI",
+    deepseek: "DeepSeek",
+  }[provider] || provider;
+}
+
+function knowledgeLabel(provider) {
+  return {
+    mongodb: "MongoDB",
+    postgresql: "PostgreSQL",
+  }[provider] || provider;
 }
 
 function summarize(results, requestedCount = results.length) {

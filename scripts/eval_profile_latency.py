@@ -98,7 +98,11 @@ async def _run_full_rag(args: argparse.Namespace, cases: list[dict[str, Any]]) -
     if args.rerank_candidates is not None:
         os.environ["YOLORAG_RERANK_CANDIDATE_LIMIT"] = str(args.rerank_candidates)
     os.environ["YOLORAG_KNOWLEDGE_PROVIDER"] = args.knowledge_provider
-    runtime = build_runtime(provider_name=args.provider, mode=args.mode)
+    runtime = build_runtime(
+        provider_name=args.provider,
+        mode=args.mode,
+        knowledge_provider=args.knowledge_provider,
+    )
     runtime.orchestrator.retrieval_top_k = args.top_k
 
     rows = []
@@ -228,7 +232,7 @@ def _report(
             "id": run_id,
             "created_at": datetime.now(UTC).isoformat(),
             "mode": mode,
-            "provider": args.provider or os.getenv("YOLORAG_API_PROVIDER", "openai"),
+            "provider": args.provider or os.getenv("YOLORAG_API_PROVIDER", "deepseek"),
             "knowledge_provider": selected_knowledge_provider(args.knowledge_provider),
             "response_mode": args.mode,
             "top_k": args.top_k,
