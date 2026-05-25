@@ -10,58 +10,38 @@ class OrchestrationPlan:
     mode: ResponseMode
     should_retrieve: bool
     top_k: int
+    min_relevance_score: float | None
     reason: str
 
 
 class SimpleRoutePlanner:
-    domain_keywords = {
-        "ultralytics",
-        "yolo",
-        "training",
-        "dataset",
-        "export",
-        "inference",
-        "model",
-        "github",
-        "issue",
-        "error",
-        "debug",
-    }
-
-    generic_starters = {
-        "hello",
-        "hi",
-        "thanks",
-        "thank you",
-        "who are you",
-        "what can you do",
-    }
+    def __init__(
+        self,
+        *,
+        fast_top_k: int = 2,
+        deep_top_k: int = 4,
+        min_relevance_score: float | None = 0.5,
+    ) -> None:
+        self.fast_top_k = fast_top_k
+        self.deep_top_k = deep_top_k
+        self.min_relevance_score = min_relevance_score
 
     def plan(self, user_message: str, requested_mode: ResponseMode) -> OrchestrationPlan:
-        lowered = user_message.lower().strip()
-        looks_generic = lowered in self.generic_starters
-        looks_domain_specific = any(keyword in lowered for keyword in self.domain_keywords)
+        should_retrieve = bool(user_message.strip())
 
         if requested_mode == "deep":
             return OrchestrationPlan(
                 mode="deep",
-                should_retrieve=looks_domain_specific,
-                top_k=4,
-                reason=(
-                    "Deep mode requested; retrieval is enabled only because the "
-                    "question appears domain-specific."
-                    if looks_domain_specific
-                    else "Deep mode requested, but retrieval skipped because the question is generic."
-                ),
+                should_retrieve=should_retrieve,
+                top_k=self.deep_top_k,
+                min_relevance_score=self.min_relevance_score,
+                reason="Deep mode uses retrieval when configured and filters low-confidence context.",
             )
 
         return OrchestrationPlan(
             mode="fast",
-            should_retrieve=looks_domain_specific and not looks_generic,
-            top_k=2,
-            reason=(
-                "Fast mode with targeted retrieval because the question appears domain-specific."
-                if looks_domain_specific and not looks_generic
-                else "Fast mode skipped retrieval to minimize latency and context noise."
-            ),
+            should_retrieve=should_retrieve,
+            top_k=self.fast_top_k,
+            min_relevance_score=self.min_relevance_score,
+            reason="Fast mode uses lightweight retrieval and filters low-confidence context.",
         )

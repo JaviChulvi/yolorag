@@ -8,7 +8,7 @@ from yolorag.usage.models import CostBreakdown, TokenUsage
 
 
 ResponseMode = Literal["fast", "deep"]
-Message = dict[str, str]
+Message = dict[str, Any]
 
 
 @dataclass(frozen=True)

@@ -1,14 +1,18 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from yolorag.core.conversation import ConversationLogger, ConversationMessageLog
+from yolorag.core.conversation import ConversationLogger
 from yolorag.core.routing import SimpleRoutePlanner
 from yolorag.core.tracing import OrchestrationTrace
+from yolorag.core.transcripts import (
+    schedule_assistant_message_write,
+    schedule_transcript_write,
+    schedule_user_message_write,
+)
 from yolorag.providers.base import LLMProvider, LLMRequest, Message, ResponseMode
 from yolorag.retrieval.base import RetrievalResult, Retriever
 
@@ -48,7 +52,6 @@ class RAGOrchestrator:
         retriever: Retriever | None = None,
         conversation_logger: ConversationLogger | None = None,
         route_planner: SimpleRoutePlanner | None = None,
-        force_retrieval: bool = False,
         retrieval_top_k: int | None = None,
     ) -> None:
         self.provider = provider
@@ -56,7 +59,6 @@ class RAGOrchestrator:
         self.retriever = retriever
         self.conversation_logger = conversation_logger
         self.route_planner = route_planner or SimpleRoutePlanner()
-        self.force_retrieval = force_retrieval
         self.retrieval_top_k = retrieval_top_k
 
     async def answer(
@@ -70,7 +72,8 @@ class RAGOrchestrator:
         user_message_index: int | None = None,
     ) -> OrchestratorResult:
         total_started = time.perf_counter()
-        plan = self.route_planner.plan(user_message=user_message, requested_mode=mode)
+        retrieval_query = raw_user_message or user_message
+        plan = self.route_planner.plan(user_message=retrieval_query, requested_mode=mode)
         self._schedule_user_message_write(
             conversation_id=conversation_id,
             request_id=request_id,
@@ -79,10 +82,11 @@ class RAGOrchestrator:
         )
         retrieval_started = time.perf_counter()
         retrieved_context, retrieval_error = await self._retrieve_if_needed(
-            user_message=user_message,
+            user_message=retrieval_query,
             existing_document_ids=set(),
-            should_retrieve=plan.should_retrieve or self.force_retrieval,
+            should_retrieve=plan.should_retrieve,
             top_k=self.retrieval_top_k or plan.top_k,
+            min_relevance_score=plan.min_relevance_score,
         )
         retrieval_ms = _elapsed_ms(retrieval_started)
 
@@ -107,6 +111,7 @@ class RAGOrchestrator:
         llm_ms = response.latency_ms
         total_ms = max(_elapsed_ms(total_started), retrieval_ms + llm_ms)
         orchestration_overhead_ms = max(total_ms - retrieval_ms - llm_ms, 0)
+
         self._schedule_assistant_message_write(
             conversation_id=conversation_id,
             request_id=request_id,
@@ -128,11 +133,7 @@ class RAGOrchestrator:
             estimated_cost_usd=response.cost.total_usd,
             pricing_source=response.cost.pricing_source,
             latency_ms=response.latency_ms,
-            route_reason=(
-                f"{plan.reason} Retrieval was forced by runtime configuration."
-                if self.force_retrieval
-                else plan.reason
-            ),
+            route_reason=plan.reason,
             total_ms=total_ms,
             retrieval_ms=retrieval_ms,
             vector_search_ms=retrieval_trace.vector_search_ms if retrieval_trace else 0,
@@ -161,7 +162,8 @@ class RAGOrchestrator:
         request_id: str | None = None,
         user_message_index: int | None = None,
     ) -> AsyncIterator[str]:
-        plan = self.route_planner.plan(user_message=user_message, requested_mode=mode)
+        retrieval_query = raw_user_message or user_message
+        plan = self.route_planner.plan(user_message=retrieval_query, requested_mode=mode)
         self._schedule_user_message_write(
             conversation_id=conversation_id,
             request_id=request_id,
@@ -169,10 +171,11 @@ class RAGOrchestrator:
             user_message_index=user_message_index,
         )
         retrieved_context, _retrieval_error = await self._retrieve_if_needed(
-            user_message=user_message,
+            user_message=retrieval_query,
             existing_document_ids=set(),
-            should_retrieve=plan.should_retrieve or self.force_retrieval,
+            should_retrieve=plan.should_retrieve,
             top_k=self.retrieval_top_k or plan.top_k,
+            min_relevance_score=plan.min_relevance_score,
         )
 
         messages = self._request_messages(
@@ -216,6 +219,7 @@ class RAGOrchestrator:
         existing_document_ids: set[str],
         should_retrieve: bool,
         top_k: int,
+        min_relevance_score: float | None,
     ) -> tuple[list[RetrievalResult], str | None]:
         if not should_retrieve or self.retriever is None:
             return [], None
@@ -230,14 +234,13 @@ class RAGOrchestrator:
                 exc_info=True,
             )
             return [], retrieval_error
-        return (
-            [
-                result
-                for result in results
-                if result.document.id not in existing_document_ids
-            ],
-            None,
-        )
+        filtered_results = [
+            result
+            for result in results
+            if result.document.id not in existing_document_ids
+            and _passes_relevance_threshold(result, min_relevance_score)
+        ]
+        return filtered_results, None
 
     def _request_messages(
         self,
@@ -279,16 +282,12 @@ class RAGOrchestrator:
         raw_user_message: str,
         user_message_index: int | None,
     ) -> None:
-        self._schedule_transcript_write(
-            [
-                ConversationMessageLog(
-                    conversation_id=conversation_id,
-                    role="user",
-                    content=raw_user_message,
-                    request_id=request_id,
-                    message_index=user_message_index,
-                )
-            ]
+        schedule_user_message_write(
+            self.conversation_logger,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            raw_user_message=raw_user_message,
+            user_message_index=user_message_index,
         )
 
     def _schedule_assistant_message_write(
@@ -302,36 +301,19 @@ class RAGOrchestrator:
         provider: str,
         model: str,
     ) -> None:
-        self._schedule_transcript_write(
-            [
-                ConversationMessageLog(
-                    conversation_id=conversation_id,
-                    role="assistant",
-                    content=assistant_message,
-                    request_id=request_id,
-                    message_index=None if user_message_index is None else user_message_index + 1,
-                    provider=provider,
-                    model=model,
-                    retrieved_document_ids=list(retrieved_document_ids),
-                )
-            ]
+        schedule_assistant_message_write(
+            self.conversation_logger,
+            conversation_id=conversation_id,
+            request_id=request_id,
+            assistant_message=assistant_message,
+            user_message_index=user_message_index,
+            retrieved_document_ids=retrieved_document_ids,
+            provider=provider,
+            model=model,
         )
 
-    def _schedule_transcript_write(self, messages: list[ConversationMessageLog]) -> None:
-        if self.conversation_logger is None or not messages:
-            return
-        asyncio.create_task(self._append_transcript_messages(messages))
-
-    async def _append_transcript_messages(
-        self,
-        messages: list[ConversationMessageLog],
-    ) -> None:
-        if self.conversation_logger is None:
-            return
-        try:
-            await asyncio.to_thread(self.conversation_logger.append_messages, messages)
-        except Exception:
-            logger.warning("Failed to persist chat transcript messages.", exc_info=True)
+    def _schedule_transcript_write(self, messages: list) -> None:
+        schedule_transcript_write(self.conversation_logger, messages)
 
     def _format_context(self, context: list[RetrievalResult]) -> str:
         blocks = []
@@ -381,6 +363,15 @@ class RAGOrchestrator:
 
 def _elapsed_ms(started: float) -> int:
     return int((time.perf_counter() - started) * 1000)
+
+
+def _passes_relevance_threshold(
+    result: RetrievalResult,
+    min_relevance_score: float | None,
+) -> bool:
+    if min_relevance_score is None:
+        return True
+    return result.score >= min_relevance_score
 
 
 def _last_user_message_index(messages: list[Message]) -> int | None:

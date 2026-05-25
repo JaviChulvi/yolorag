@@ -98,6 +98,8 @@ class OpenAIProvider:
                 kwargs["max_tokens"] = request.max_tokens
         if request.tools:
             kwargs["tools"] = request.tools
+            kwargs.pop("reasoning_effort", None)
+            kwargs.pop("verbosity", None)
         return kwargs
 
     def _stream_completion_kwargs(self, request: LLMRequest) -> dict:
