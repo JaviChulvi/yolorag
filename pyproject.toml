@@ -14,6 +14,7 @@ dependencies = [
   "opencv-python-headless",
   "openai",
   "pgvector",
+  "pymilvus",
   "pymongo",
   "psycopg[binary]",
   "python-dotenv",
