@@ -1,0 +1,8 @@
+{
+  "dataset_id": "crotales",
+  "model": "nomic-embed-vision-v1.5",
+  "dimensions": 128,
+  "count": 10,
+  "source": "crotales.ndjson",
+  "created_at": "2026-07-02T09:32:34.391058+00:00"
+}

@@ -1,0 +1,8 @@
+{
+  "dataset_id": "pest-and-disease-identification-2",
+  "model": "nomic-embed-vision-v1.5",
+  "dimensions": 128,
+  "count": 43,
+  "source": "pest-and-disease-identification-2.ndjson",
+  "created_at": "2026-07-02T09:32:37.629196+00:00"
+}

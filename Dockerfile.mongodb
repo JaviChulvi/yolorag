@@ -1,0 +1,7 @@
+FROM mongodb/mongodb-atlas-local:8
+
+# Atlas Local bundles mongod + the search component (mongot), so it supports
+# real $vectorSearch indexes -- the MongoDB analog to pgvector's HNSW. Like the
+# official mongo image, it runs /docker-entrypoint-initdb.d/*.js on first startup
+# (empty data dir). Mirrors Dockerfile.postgres.
+COPY deploy/mongodb/init/ /docker-entrypoint-initdb.d/
