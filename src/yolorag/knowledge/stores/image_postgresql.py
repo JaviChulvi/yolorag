@@ -12,6 +12,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from yolorag.knowledge.image_embeddings import DEFAULT_NOMIC_EMBEDDING_DIMENSIONS
+from yolorag.knowledge.image_models import ImageEmbeddingRecord, ImageSearchResult
 from yolorag.knowledge.models import IngestResult
 
 
@@ -41,22 +42,6 @@ class ImageEmbedding(Base):
         Vector(DEFAULT_NOMIC_EMBEDDING_DIMENSIONS),
         nullable=False,
     )
-
-
-@dataclass(frozen=True)
-class ImageEmbeddingRecord:
-    dataset_id: str
-    img_id: str
-    embedding: Sequence[float]
-
-
-@dataclass(frozen=True)
-class ImageSearchResult:
-    dataset_id: str
-    img_id: str
-    score: float | None
-    provider: str = "postgresql-image"
-    query_embedding_ms: int = 0
 
 
 @dataclass(frozen=True)

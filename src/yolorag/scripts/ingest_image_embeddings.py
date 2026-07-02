@@ -46,13 +46,13 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         default="postgresql",
-        choices=["postgresql"],
+        choices=["postgresql", "mongodb"],
         help="Target store (default: postgresql). More vendors can be added here.",
     )
     parser.add_argument(
         "--dsn",
         default=None,
-        help="Override the Postgres DSN (else YOLORAG_POSTGRES_DSN / default).",
+        help="Override the Postgres DSN (postgresql only; else YOLORAG_POSTGRES_DSN / default).",
     )
     parser.add_argument(
         "--batch-size", type=int, default=500, help="Upsert batch size (default: 500)."
@@ -71,9 +71,7 @@ def main() -> int:
     store = _build_store(args.provider, args.dsn)
     store.ensure_schema()
 
-    # ImageEmbeddingRecord lives in the Postgres store module today; import lazily
-    # so `--help` and provider selection stay independent of the store's deps.
-    from yolorag.knowledge.stores.image_postgresql import ImageEmbeddingRecord
+    from yolorag.knowledge.image_models import ImageEmbeddingRecord
 
     print(f"Ingesting {len(files)} file(s) into {store.provider_name}\n")
     total_attempted = total_inserted = total_matched = 0
@@ -127,6 +125,15 @@ def _build_store(provider: str, dsn: str | None):
                 embedding_dimensions=config.embedding_dimensions,
             )
         return PostgresImageEmbeddingStore(config)
+    if provider == "mongodb":
+        from yolorag.knowledge.stores.image_mongodb import (
+            MongoImageEmbeddingStore,
+            MongoImageEmbeddingStoreConfig,
+        )
+
+        if dsn:
+            raise ValueError("Use YOLORAG_MONGODB_URI for mongodb, not --dsn.")
+        return MongoImageEmbeddingStore(MongoImageEmbeddingStoreConfig.from_env())
     raise ValueError(f"Unsupported provider {provider!r}.")
 
 
