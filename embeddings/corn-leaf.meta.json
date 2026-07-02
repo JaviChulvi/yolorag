@@ -1,0 +1,8 @@
+{
+  "dataset_id": "corn-leaf",
+  "model": "nomic-embed-vision-v1.5",
+  "dimensions": 128,
+  "count": 70,
+  "source": "corn-leaf.ndjson",
+  "created_at": "2026-07-02T09:32:33.799351+00:00"
+}

@@ -8,3 +8,5 @@ __pycache__/
 .DS_Store
 evals/runs/
 data/
+dataset_images/
+imgs/
