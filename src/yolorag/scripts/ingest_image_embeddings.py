@@ -46,7 +46,7 @@ def main() -> int:
     parser.add_argument(
         "--provider",
         default="postgresql",
-        choices=["postgresql", "mongodb"],
+        choices=["postgresql", "mongodb", "qdrant"],
         help="Target store (default: postgresql). More vendors can be added here.",
     )
     parser.add_argument(
@@ -134,6 +134,15 @@ def _build_store(provider: str, dsn: str | None):
         if dsn:
             raise ValueError("Use YOLORAG_MONGODB_URI for mongodb, not --dsn.")
         return MongoImageEmbeddingStore(MongoImageEmbeddingStoreConfig.from_env())
+    if provider == "qdrant":
+        from yolorag.knowledge.stores.image_qdrant import (
+            QdrantImageEmbeddingStore,
+            QdrantImageEmbeddingStoreConfig,
+        )
+
+        if dsn:
+            raise ValueError("Use YOLORAG_QDRANT_URL for qdrant, not --dsn.")
+        return QdrantImageEmbeddingStore(QdrantImageEmbeddingStoreConfig.from_env())
     raise ValueError(f"Unsupported provider {provider!r}.")
 
 

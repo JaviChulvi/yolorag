@@ -17,6 +17,7 @@ dependencies = [
   "pymongo",
   "psycopg[binary]",
   "python-dotenv",
+  "qdrant-client",
   "sqlalchemy",
   "uvicorn",
 ]

@@ -1,0 +1,16 @@
+FROM qdrant/qdrant:latest
+
+# Qdrant has no boot-time init hook (unlike the Postgres/Mongo images), so we bake a
+# thin entrypoint wrapper: it starts Qdrant, waits for the REST API to be ready, then
+# creates the image_embeddings collection + dataset_id payload index. This gives the
+# same "structure baked into the image" behavior as Dockerfile.postgres/Dockerfile.mongodb.
+USER root
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY deploy/qdrant/entrypoint.sh /usr/local/bin/yolorag-entrypoint.sh
+COPY deploy/qdrant/init/ /docker-entrypoint-initdb.d/
+RUN chmod +x /usr/local/bin/yolorag-entrypoint.sh /docker-entrypoint-initdb.d/*.sh
+
+ENTRYPOINT ["/usr/local/bin/yolorag-entrypoint.sh"]
