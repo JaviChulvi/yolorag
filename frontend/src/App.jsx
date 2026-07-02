@@ -4,6 +4,7 @@ import {
   BrainCircuit,
   Cpu,
   Database,
+  Gauge,
   Layers3,
   Play,
   Sparkles,
@@ -16,6 +17,7 @@ import LLMWidget from "./components/LLMWidget.jsx";
 import { streamDeepAgentChat } from "./lib/chatApi.js";
 import { DEFAULT_RUNTIME_SELECTION, config, runtimeUrl } from "./lib/config.js";
 import { runFastEvals } from "./lib/evalApi.js";
+import { fetchBenchmarkMeta, runBenchmark } from "./lib/benchApi.js";
 
 const STORAGE_KEY = "yolorag.deepAgentConversations.v1";
 const AGENT_INSTRUCTIONS =
@@ -277,7 +279,7 @@ export default function App() {
   }
 
   return (
-    <main className={`console-shell ${activePage === "eval" ? "eval-active" : ""}`}>
+    <main className={`console-shell ${activePage !== "chat" ? "eval-active" : ""}`}>
       <aside className="sidebar">
         <div className="brand-block">
           <div className="brand-mark">YO</div>
@@ -337,6 +339,20 @@ export default function App() {
             <small>Fast timing lab</small>
           </span>
         </button>
+
+        <button
+          className={`eval-page-button ${activePage === "bench" ? "is-active" : ""}`}
+          type="button"
+          onClick={() => setActivePage("bench")}
+        >
+          <span className="eval-page-button-icon" aria-hidden="true">
+            <Gauge size={16} />
+          </span>
+          <span className="eval-page-button-copy">
+            <strong>Open benchmark</strong>
+            <small>Vector DB QPS + P99</small>
+          </span>
+        </button>
       </aside>
 
       {activePage === "eval" ? (
@@ -344,6 +360,8 @@ export default function App() {
           runtimeSelection={runtimeSelection}
           setRuntimeSelection={setRuntimeSelection}
         />
+      ) : activePage === "bench" ? (
+        <BenchmarkPage />
       ) : (
         <section className="chat-panel">
         <header className="chat-header">
@@ -796,6 +814,393 @@ function EvalComparisonGroup({ title, rows }) {
       </div>
     </div>
   );
+}
+
+const BENCH_PROVIDER_LABELS = {
+  postgresql: "pgvector",
+  mongodb: "MongoDB",
+  qdrant: "Qdrant",
+  milvus: "Milvus",
+};
+
+function benchProviderLabel(provider) {
+  const key = String(provider || "").replace("-image", "");
+  return BENCH_PROVIDER_LABELS[key] || key || "unknown";
+}
+
+function BenchmarkPage() {
+  const [meta, setMeta] = useState(null);
+  const [selectedProviders, setSelectedProviders] = useState([]);
+  const [datasetId, setDatasetId] = useState("");
+  const [numQueries, setNumQueries] = useState(2000);
+  const [concurrency, setConcurrency] = useState(8);
+  const [topK, setTopK] = useState(10);
+  const [warmup, setWarmup] = useState(100);
+  const [recallTarget, setRecallTarget] = useState(0.95);
+  const [result, setResult] = useState(null);
+  const [error, setError] = useState("");
+  const [startedAt, setStartedAt] = useState(null);
+  const [durationMs, setDurationMs] = useState(0);
+  const [now, setNow] = useState(Date.now());
+  const requestRef = useRef(null);
+  const isRunning = Boolean(startedAt);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    fetchBenchmarkMeta(controller.signal)
+      .then((loaded) => {
+        setMeta(loaded);
+        setSelectedProviders(loaded.providers || []);
+        const largest = [...(loaded.datasets || [])].sort((a, b) => b.count - a.count)[0];
+        setDatasetId(largest?.dataset_id || "");
+      })
+      .catch((metaError) => {
+        if (metaError.name !== "AbortError") setError(metaError.message);
+      });
+    return () => controller.abort();
+  }, []);
+
+  useEffect(() => {
+    if (!isRunning) return undefined;
+    const interval = window.setInterval(() => setNow(Date.now()), 200);
+    return () => window.clearInterval(interval);
+  }, [isRunning]);
+
+  function toggleProvider(provider) {
+    setSelectedProviders((current) =>
+      current.includes(provider)
+        ? current.filter((item) => item !== provider)
+        : [...current, provider],
+    );
+  }
+
+  async function handleRun() {
+    if (!selectedProviders.length || !datasetId) return;
+    const controller = new AbortController();
+    requestRef.current = controller;
+    const start = Date.now();
+    setError("");
+    setResult(null);
+    setStartedAt(start);
+    setNow(start);
+
+    try {
+      const response = await runBenchmark(
+        {
+          providers: selectedProviders,
+          dataset_id: datasetId,
+          num_queries: Number(numQueries),
+          concurrency: Number(concurrency),
+          top_k: Number(topK),
+          warmup: Number(warmup),
+          measure_recall: true,
+          recall_target: Number(recallTarget),
+        },
+        controller.signal,
+      );
+      setResult(response);
+      setDurationMs(Date.now() - start);
+    } catch (runError) {
+      setError(runError.name === "AbortError" ? "Benchmark stopped." : runError.message);
+    } finally {
+      requestRef.current = null;
+      setStartedAt(null);
+    }
+  }
+
+  function handleStop() {
+    requestRef.current?.abort();
+  }
+
+  const caps = meta?.resource_caps;
+  const okRows = (result?.results || []).filter((row) => !row.error);
+  const errorRows = (result?.results || []).filter((row) => row.error);
+  const leaderboard = [...okRows].sort((a, b) => b.qps - a.qps);
+  const bestQpsRow = okRows.length
+    ? okRows.reduce((best, row) => (row.qps > best.qps ? row : best))
+    : null;
+  const bestP99Row = okRows.length
+    ? okRows.reduce((best, row) => (row.latency_ms.p99 < best.latency_ms.p99 ? row : best))
+    : null;
+  const maxQps = bestQpsRow ? bestQpsRow.qps : 1;
+  const maxP99 = okRows.length ? Math.max(...okRows.map((row) => row.latency_ms.p99)) : 1;
+  const elapsed = isRunning ? now - startedAt : durationMs;
+
+  return (
+    <section className="eval-panel bench-panel">
+      <header className="eval-header">
+        <div>
+          <p className="route-label">Ultralytics / Benchmark</p>
+          <h2>Vector DB benchmark</h2>
+        </div>
+        <div className="header-actions">
+          {caps ? (
+            <div className="route-pill">
+              <Cpu size={14} aria-hidden="true" />
+              {caps.cpus} CPU / {caps.memory} each
+            </div>
+          ) : null}
+          {result?.config ? (
+            <div className="route-pill muted">
+              {result.config.dataset_id} · n={result.config.dataset_count}
+            </div>
+          ) : null}
+          {result?.config?.iso_recall ? (
+            <div className="route-pill">recall ≥ {result.config.recall_target}</div>
+          ) : null}
+        </div>
+      </header>
+
+      <section className="eval-hero bench-hero">
+        <div className="eval-hero-copy">
+          <p className="eval-eyebrow">Fair, same-resource comparison</p>
+          <h3>Query throughput and tail latency across the running vector DBs.</h3>
+          <p>
+            The same query set, top_k, warmup and concurrency are replayed against each
+            provider sequentially — every container capped to identical CPU/memory. Each
+            engine's search effort (ef / numCandidates) is auto-tuned to the recall target,
+            so throughput is compared at <strong>equal accuracy</strong>. Qdrant and Milvus
+            query over gRPC; pgvector is in-process, MongoDB via mongot.
+          </p>
+
+          <div className="bench-provider-chips" role="group" aria-label="Providers">
+            {(meta?.providers || []).map((provider) => {
+              const active = selectedProviders.includes(provider);
+              return (
+                <button
+                  key={provider}
+                  type="button"
+                  className={active ? "is-active" : ""}
+                  aria-pressed={active}
+                  disabled={isRunning}
+                  onClick={() => toggleProvider(provider)}
+                >
+                  <Database size={13} aria-hidden="true" />
+                  {benchProviderLabel(provider)}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="bench-params">
+            <label>
+              <span>Dataset</span>
+              <select
+                value={datasetId}
+                disabled={isRunning}
+                onChange={(event) => setDatasetId(event.target.value)}
+              >
+                {(meta?.datasets || []).map((dataset) => (
+                  <option key={dataset.dataset_id} value={dataset.dataset_id}>
+                    {dataset.dataset_id} ({dataset.count})
+                  </option>
+                ))}
+              </select>
+            </label>
+            <BenchNumber label="Queries" value={numQueries} onChange={setNumQueries} disabled={isRunning} />
+            <BenchNumber label="Concurrency" value={concurrency} onChange={setConcurrency} disabled={isRunning} />
+            <BenchNumber label="top_k" value={topK} onChange={setTopK} disabled={isRunning} />
+            <BenchNumber label="Warmup" value={warmup} onChange={setWarmup} disabled={isRunning} />
+            <label>
+              <span>Recall target</span>
+              <input
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={recallTarget}
+                disabled={isRunning}
+                onChange={(event) => setRecallTarget(event.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="eval-run-box">
+          <div>
+            <span>{isRunning ? "Running" : result ? "Last run" : "Ready"}</span>
+            <strong>{formatDuration(elapsed)}</strong>
+          </div>
+          {isRunning ? (
+            <button className="eval-run-button stop" type="button" onClick={handleStop}>
+              Stop
+            </button>
+          ) : (
+            <button
+              className="eval-run-button"
+              type="button"
+              onClick={handleRun}
+              disabled={!selectedProviders.length || !datasetId}
+            >
+              Run benchmark
+            </button>
+          )}
+        </div>
+      </section>
+
+      {error ? <div className="eval-error">{error}</div> : null}
+
+      <section className="eval-summary-grid" aria-label="Benchmark summary">
+        <div className="eval-metric">
+          <span>Fastest (QPS)</span>
+          <strong>{bestQpsRow ? benchProviderLabel(bestQpsRow.provider) : "-"}</strong>
+        </div>
+        <div className="eval-metric">
+          <span>Best QPS</span>
+          <strong>{bestQpsRow ? Math.round(bestQpsRow.qps).toLocaleString() : "-"}</strong>
+        </div>
+        <div className="eval-metric">
+          <span>Lowest P99</span>
+          <strong>{bestP99Row ? benchProviderLabel(bestP99Row.provider) : "-"}</strong>
+        </div>
+        <div className="eval-metric">
+          <span>Best P99</span>
+          <strong>{bestP99Row ? formatMs(bestP99Row.latency_ms.p99) : "-"}</strong>
+        </div>
+        <div className="eval-metric">
+          <span>Providers</span>
+          <strong>{okRows.length || (isRunning ? "…" : 0)}</strong>
+        </div>
+        <div className="eval-metric">
+          <span>Queries each</span>
+          <strong>
+            {(result?.config?.num_queries ?? Number(numQueries)).toLocaleString()}
+          </strong>
+        </div>
+      </section>
+
+      {okRows.length ? (
+        <section className="eval-comparison bench-comparison" aria-label="Benchmark comparison">
+          <BenchBars
+            title="Throughput"
+            unit="QPS · higher is better"
+            rows={leaderboard}
+            value={(row) => row.qps}
+            format={(value) => Math.round(value).toLocaleString()}
+            max={maxQps}
+          />
+          <BenchBars
+            title="P99 latency"
+            unit="ms · lower is better"
+            rows={[...okRows].sort((a, b) => a.latency_ms.p99 - b.latency_ms.p99)}
+            value={(row) => row.latency_ms.p99}
+            format={(value) => formatMs(value)}
+            max={maxP99}
+          />
+        </section>
+      ) : null}
+
+      <section className="eval-results">
+        <div className="eval-results-header">
+          <h3>Leaderboard</h3>
+          <span>{isRunning ? "running…" : `${okRows.length} providers`}</span>
+        </div>
+        <div className="eval-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Provider</th>
+                <th>QPS</th>
+                <th>p50</th>
+                <th>p95</th>
+                <th>P99</th>
+                <th>mean</th>
+                <th>ef</th>
+                <th>recall@k</th>
+                <th>errors</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leaderboard.length ? (
+                leaderboard.map((row, index) => (
+                  <tr key={row.provider} className={index === 0 ? "is-best" : ""}>
+                    <td>
+                      <strong>{benchProviderLabel(row.provider)}</strong>
+                    </td>
+                    <td>{Math.round(row.qps).toLocaleString()}</td>
+                    <td>{formatMs(row.latency_ms.p50)}</td>
+                    <td>{formatMs(row.latency_ms.p95)}</td>
+                    <td>{formatMs(row.latency_ms.p99)}</td>
+                    <td>{formatMs(row.latency_ms.mean)}</td>
+                    <td>{row.search_ef ?? "-"}</td>
+                    <td>{row.recall_at_k == null ? "-" : row.recall_at_k.toFixed(3)}</td>
+                    <td>{row.errors}</td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="9">
+                    {isRunning
+                      ? "Benchmarking each provider sequentially…"
+                      : "Select providers and run the benchmark."}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        {errorRows.length ? (
+          <div className="bench-errors">
+            {errorRows.map((row) => (
+              <div key={row.provider}>
+                <strong>{benchProviderLabel(row.provider)}</strong> — {row.error}
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+    </section>
+  );
+}
+
+function BenchNumber({ label, value, onChange, disabled }) {
+  return (
+    <label>
+      <span>{label}</span>
+      <input
+        type="number"
+        min="1"
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    </label>
+  );
+}
+
+function BenchBars({ title, unit, rows, value, format, max }) {
+  return (
+    <div className="comparison-group">
+      <div className="comparison-group-title">
+        <h4>{title}</h4>
+        <span>{unit}</span>
+      </div>
+      <div className="comparison-list">
+        {rows.map((row, index) => (
+          <div className={`comparison-row ${index === 0 ? "is-best" : ""}`} key={row.provider}>
+            <div className="comparison-row-top">
+              <div>
+                <strong>{benchProviderLabel(row.provider)}</strong>
+                <span>{row.errors ? `${row.errors} errors` : "ok"}</span>
+              </div>
+              <time>{format(value(row))}</time>
+            </div>
+            <div className="comparison-bar" aria-hidden="true">
+              <span style={{ width: `${Math.max((value(row) / max) * 100, 4)}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function formatMs(value) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "-";
+  const num = Number(value);
+  if (num < 10) return `${num.toFixed(2)} ms`;
+  if (num < 100) return `${num.toFixed(1)} ms`;
+  return `${Math.round(num)} ms`;
 }
 
 function AgentRunStatus({ message, now, onStop }) {

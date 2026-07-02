@@ -111,48 +111,9 @@ def main() -> int:
 
 
 def _build_store(provider: str, dsn: str | None):
-    if provider == "postgresql":
-        from yolorag.knowledge.stores.image_postgresql import (
-            PostgresImageEmbeddingStore,
-            PostgresImageEmbeddingStoreConfig,
-        )
+    from yolorag.knowledge.stores.image_factory import build_image_store
 
-        config = PostgresImageEmbeddingStoreConfig.from_env()
-        if dsn:
-            config = PostgresImageEmbeddingStoreConfig(
-                dsn=dsn,
-                table=config.table,
-                embedding_dimensions=config.embedding_dimensions,
-            )
-        return PostgresImageEmbeddingStore(config)
-    if provider == "mongodb":
-        from yolorag.knowledge.stores.image_mongodb import (
-            MongoImageEmbeddingStore,
-            MongoImageEmbeddingStoreConfig,
-        )
-
-        if dsn:
-            raise ValueError("Use YOLORAG_MONGODB_URI for mongodb, not --dsn.")
-        return MongoImageEmbeddingStore(MongoImageEmbeddingStoreConfig.from_env())
-    if provider == "qdrant":
-        from yolorag.knowledge.stores.image_qdrant import (
-            QdrantImageEmbeddingStore,
-            QdrantImageEmbeddingStoreConfig,
-        )
-
-        if dsn:
-            raise ValueError("Use YOLORAG_QDRANT_URL for qdrant, not --dsn.")
-        return QdrantImageEmbeddingStore(QdrantImageEmbeddingStoreConfig.from_env())
-    if provider == "milvus":
-        from yolorag.knowledge.stores.image_milvus import (
-            MilvusImageEmbeddingStore,
-            MilvusImageEmbeddingStoreConfig,
-        )
-
-        if dsn:
-            raise ValueError("Use YOLORAG_MILVUS_URI for milvus, not --dsn.")
-        return MilvusImageEmbeddingStore(MilvusImageEmbeddingStoreConfig.from_env())
-    raise ValueError(f"Unsupported provider {provider!r}.")
+    return build_image_store(provider, postgres_dsn=dsn)
 
 
 if __name__ == "__main__":

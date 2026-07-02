@@ -5,6 +5,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from typing import Any, Sequence
+from urllib.parse import urlparse
 
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
@@ -14,6 +15,7 @@ from qdrant_client.models import (
     MatchValue,
     PayloadSchemaType,
     PointStruct,
+    SearchParams,
     VectorParams,
 )
 
@@ -40,6 +42,9 @@ class QdrantImageEmbeddingStoreConfig:
     url: str = DEFAULT_QDRANT_URL
     collection: str = DEFAULT_IMAGE_EMBEDDINGS_COLLECTION
     embedding_dimensions: int = DEFAULT_NOMIC_EMBEDDING_DIMENSIONS
+    # gRPC is ~80x faster than REST for this workload; prefer it for a fair benchmark.
+    prefer_grpc: bool = True
+    grpc_port: int = 6334
 
     @classmethod
     def from_env(cls) -> QdrantImageEmbeddingStoreConfig:
@@ -53,6 +58,8 @@ class QdrantImageEmbeddingStoreConfig:
                 "YOLORAG_IMAGE_EMBEDDING_DIMENSIONS",
                 DEFAULT_NOMIC_EMBEDDING_DIMENSIONS,
             ),
+            prefer_grpc=_env_bool("YOLORAG_QDRANT_PREFER_GRPC", True),
+            grpc_port=_env_int("YOLORAG_QDRANT_GRPC_PORT", 6334),
         )
 
 
@@ -77,7 +84,17 @@ class QdrantImageEmbeddingStore:
                 f"{DEFAULT_NOMIC_EMBEDDING_DIMENSIONS}-dimension vectors."
             )
         self.config = config
-        self.client = client or QdrantClient(url=config.url)
+        if client is not None:
+            self.client = client
+        else:
+            parsed = urlparse(config.url)
+            self.client = QdrantClient(
+                host=parsed.hostname or "localhost",
+                port=parsed.port or 6333,
+                grpc_port=config.grpc_port,
+                prefer_grpc=config.prefer_grpc,
+                https=parsed.scheme == "https",
+            )
         self.last_query_embedding_ms = 0
 
     def ping(self) -> None:
@@ -156,6 +173,7 @@ class QdrantImageEmbeddingStore:
         query_embedding: Sequence[float],
         *,
         limit: int = 8,
+        search_ef: int | None = None,
     ) -> list[ImageSearchResult]:
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
@@ -169,6 +187,7 @@ class QdrantImageEmbeddingStore:
             ),
             limit=limit,
             with_payload=True,
+            search_params=SearchParams(hnsw_ef=search_ef) if search_ef else None,
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         self.last_query_embedding_ms = elapsed_ms
@@ -199,3 +218,10 @@ def _env_int(name: str, default: int) -> int:
     if parsed <= 0:
         raise ValueError(f"{name} must be greater than 0.")
     return parsed
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}

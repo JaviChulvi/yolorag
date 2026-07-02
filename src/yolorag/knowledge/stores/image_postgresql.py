@@ -149,12 +149,18 @@ class PostgresImageEmbeddingStore:
         query_embedding: Sequence[float],
         *,
         limit: int = 8,
+        search_ef: int | None = None,
     ) -> list[ImageSearchResult]:
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
 
         started = time.perf_counter()
         with self.Session() as session:
+            if search_ef:
+                # pgvector requires hnsw.ef_search >= k; SET LOCAL scopes it to this txn.
+                # Postgres SET can't use bind params, so interpolate the validated int.
+                ef_value = max(int(search_ef), limit)
+                session.execute(text(f"SET LOCAL hnsw.ef_search = {ef_value}"))
             distance = ImageEmbedding.embedding.cosine_distance(list(query_embedding))
             statement = (
                 select(ImageEmbedding, (1 - distance).label("score"))

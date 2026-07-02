@@ -145,11 +145,15 @@ class MilvusImageEmbeddingStore:
         query_embedding: Sequence[float],
         *,
         limit: int = 8,
+        search_ef: int | None = None,
     ) -> list[ImageSearchResult]:
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
 
         self.ensure_schema()
+        search_params: dict[str, Any] = {"metric_type": "COSINE"}
+        if search_ef:
+            search_params["params"] = {"ef": max(int(search_ef), limit)}
         started = time.perf_counter()
         response = self.client.search(
             self.config.collection,
@@ -158,7 +162,7 @@ class MilvusImageEmbeddingStore:
             limit=limit,
             filter=f'dataset_id == "{dataset_id}"',
             output_fields=["dataset_id", "img_id"],
-            search_params={"metric_type": "COSINE"},
+            search_params=search_params,
         )
         elapsed_ms = int((time.perf_counter() - started) * 1000)
         self.last_query_embedding_ms = elapsed_ms

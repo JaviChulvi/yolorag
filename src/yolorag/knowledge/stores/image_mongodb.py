@@ -166,10 +166,12 @@ class MongoImageEmbeddingStore:
         query_embedding: Sequence[float],
         *,
         limit: int = 8,
+        search_ef: int | None = None,
     ) -> list[ImageSearchResult]:
         if limit <= 0:
             raise ValueError("limit must be greater than 0")
 
+        num_candidates = max(int(search_ef), limit) if search_ef else max(limit * 20, 100)
         started = time.perf_counter()
         pipeline = [
             {
@@ -177,7 +179,7 @@ class MongoImageEmbeddingStore:
                     "index": self.config.vector_index,
                     "path": "embedding",
                     "queryVector": [float(value) for value in query_embedding],
-                    "numCandidates": max(limit * 20, 100),
+                    "numCandidates": num_candidates,
                     "limit": limit,
                     "filter": {"dataset_id": dataset_id},
                 }

@@ -1656,3 +1656,95 @@ button {
     transform: translateY(-3px);
   }
 }
+
+/* Benchmark page ------------------------------------------------------- */
+.bench-provider-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 18px;
+}
+.bench-provider-chips button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line-strong);
+  background: var(--field);
+  color: var(--muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+.bench-provider-chips button:hover:not(:disabled) {
+  color: var(--ink);
+  border-color: var(--ultra-blue);
+}
+.bench-provider-chips button.is-active {
+  color: var(--ink);
+  border-color: var(--ultra-blue);
+  background: var(--soft-blue);
+}
+.bench-provider-chips button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.bench-params {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin-top: 16px;
+}
+.bench-params label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.bench-params select,
+.bench-params input {
+  background: var(--field);
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink);
+  padding: 8px 10px;
+  font-size: 13px;
+  min-width: 96px;
+  font-variant-numeric: tabular-nums;
+}
+.bench-params input {
+  width: 110px;
+}
+.bench-params select:focus-visible,
+.bench-params input:focus-visible {
+  outline: 2px solid var(--ultra-blue);
+  outline-offset: 1px;
+}
+
+.bench-comparison {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.bench-errors {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--danger);
+}
+.bench-errors strong {
+  color: var(--ink);
+}
+
+.bench-panel table td:first-child,
+.bench-panel table th:first-child {
+  text-align: left;
+}
