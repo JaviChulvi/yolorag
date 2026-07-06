@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Bot,
+  Boxes,
   BrainCircuit,
   Cpu,
   Database,
@@ -14,6 +15,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import LLMWidget from "./components/LLMWidget.jsx";
+import DatasetPage from "./pages/DatasetPage.jsx";
 import { streamDeepAgentChat } from "./lib/chatApi.js";
 import { DEFAULT_RUNTIME_SELECTION, config, runtimeUrl } from "./lib/config.js";
 import { runFastEvals } from "./lib/evalApi.js";
@@ -353,6 +355,20 @@ export default function App() {
             <small>Vector DB QPS + P99</small>
           </span>
         </button>
+
+        <button
+          className={`eval-page-button ${activePage === "dataset" ? "is-active" : ""}`}
+          type="button"
+          onClick={() => setActivePage("dataset")}
+        >
+          <span className="eval-page-button-icon" aria-hidden="true">
+            <Boxes size={16} />
+          </span>
+          <span className="eval-page-button-copy">
+            <strong>Open dataset</strong>
+            <small>Platform explorer</small>
+          </span>
+        </button>
       </aside>
 
       {activePage === "eval" ? (
@@ -362,6 +378,8 @@ export default function App() {
         />
       ) : activePage === "bench" ? (
         <BenchmarkPage />
+      ) : activePage === "dataset" ? (
+        <DatasetPage />
       ) : (
         <section className="chat-panel">
         <header className="chat-header">

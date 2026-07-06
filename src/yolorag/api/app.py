@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from yolorag.api.bench import router as bench_router
 from yolorag.api.chat import router as chat_router
+from yolorag.api.datasets import router as datasets_router
 from yolorag.config.settings import getenv
 from yolorag.runtime import YoloRAGAgentRuntime, YoloRAGRuntime
 
@@ -45,6 +46,7 @@ def create_app(
 
     app.include_router(chat_router, prefix="/api")
     app.include_router(bench_router, prefix="/api")
+    app.include_router(datasets_router, prefix="/api")
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
