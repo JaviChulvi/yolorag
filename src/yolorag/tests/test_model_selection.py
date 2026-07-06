@@ -9,6 +9,7 @@ from yolorag.config.model_defaults import default_model_for, model_matrix
 from yolorag.providers.base import LLMRequest
 from yolorag.providers.deepseek_provider import DeepSeekProvider
 from yolorag.providers.factory import get_llm_provider
+from yolorag.providers.gemini_provider import GeminiProvider
 from yolorag.providers.openai_provider import OpenAIProvider
 from yolorag.runtime import _resolve_model
 
@@ -63,12 +64,19 @@ class ProviderFactoryTests(unittest.TestCase):
         self.assertIsInstance(provider, DeepSeekProvider)
         self.assertEqual(provider.provider_name, "deepseek")
 
+    def test_builds_gemini_provider_from_registry(self) -> None:
+        with patch.dict("os.environ", {"GEMINI_API_KEY": "test-gemini"}, clear=True):
+            provider = get_llm_provider("gemini")
+
+        self.assertIsInstance(provider, GeminiProvider)
+        self.assertEqual(provider.provider_name, "gemini")
+
     def test_rejects_unsupported_provider_with_supported_names(self) -> None:
         with self.assertRaisesRegex(
             ValueError,
-            "Unsupported provider 'gemini'. Supported providers: deepseek, openai.",
+            "Unsupported provider 'anthropic'. Supported providers: deepseek, gemini, openai.",
         ):
-            get_llm_provider("gemini")
+            get_llm_provider("anthropic")
 
     def test_requires_provider_api_key(self) -> None:
         with patch.dict("os.environ", {}, clear=True):
@@ -77,6 +85,14 @@ class ProviderFactoryTests(unittest.TestCase):
                 "Missing required environment variable OPENAI_API_KEY.",
             ):
                 get_llm_provider("openai")
+
+    def test_gemini_requires_api_key_lists_both_env_vars(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "GEMINI_API_KEY or GOOGLE_API_KEY",
+            ):
+                get_llm_provider("gemini")
 
 
 class ProviderRequestOptionTests(unittest.TestCase):

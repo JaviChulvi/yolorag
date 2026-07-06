@@ -44,6 +44,19 @@ class LLMStreamEvent:
     raw_chunk: Any = None
 
 
+class ProviderError(RuntimeError):
+    """Raised when a provider cannot fulfil a request.
+
+    ``status`` mirrors the intended HTTP status so an API layer can surface a
+    clean error (e.g. 400 for a bad model/blocked content, 502 for an upstream
+    fault) rather than a generic 500.
+    """
+
+    def __init__(self, message: str, status: int = 502) -> None:
+        super().__init__(message)
+        self.status = status
+
+
 class LLMProvider(Protocol):
     provider_name: str
 

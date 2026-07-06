@@ -12,6 +12,10 @@ BUILT_IN_MODEL_DEFAULTS: dict[str, dict[ResponseMode, str]] = {
         "fast": "deepseek-v4-flash",
         "deep": "deepseek-v4-pro",
     },
+    "gemini": {
+        "fast": "gemini-3.1-flash-lite",
+        "deep": "gemma-4-31b-it",
+    },
 }
 
 
