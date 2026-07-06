@@ -280,9 +280,9 @@ SERVICE_PASSWORD_POSTGRES=yolorag
 Start the stack:
 
 ```bash
-docker compose \
-  -f docker-compose.coolify.yml \
-  -f docker-compose.local.yml \
+docker compose --env-file .env \
+  -f docker/docker-compose.coolify.yml \
+  -f docker/docker-compose.local.yml \
   up -d --build
 ```
 
@@ -472,7 +472,7 @@ YOLORAG_RETRIEVAL_MIN_SCORE=0.50
 
 ## Docker And Coolify Notes
 
-The Coolify deployment lives in `docker-compose.coolify.yml`. It builds separate
+The Coolify deployment lives in `docker/docker-compose.coolify.yml`. It builds separate
 backend and frontend images, runs `pgvector/pgvector:pg17`, and loads the
 precomputed PostgreSQL embeddings from `deploy/postgres/init/010_docs_chunks.sql.gz`
 on first database initialization.
@@ -486,9 +486,9 @@ PYTHONPATH=src python -m yolorag.scripts.export_postgres_seed
 Local smoke test without the earlier quick-start section:
 
 ```bash
-SERVICE_PASSWORD_POSTGRES=yolorag docker compose \
-  -f docker-compose.coolify.yml \
-  -f docker-compose.local.yml \
+SERVICE_PASSWORD_POSTGRES=yolorag docker compose --env-file .env \
+  -f docker/docker-compose.coolify.yml \
+  -f docker/docker-compose.local.yml \
   up -d --build
 ```
 

@@ -8,6 +8,17 @@ Instructions for Codex and other coding agents working in this repo.
 - The sibling `../llm` folder is an external widget/client contract, not source owned by this repo.
 - Keep work focused on the requested change. Do not bundle unrelated cleanup or generated assets.
 
+## Repository Layout
+
+- `src/yolorag/api/` — FastAPI routes: `chat.py` (fast/deep chat), `datasets.py` (dataset explorer + vision `describe`), `bench.py` (vector-DB benchmark), plus `sse.py`/`schemas.py`.
+- `src/yolorag/providers/` — LLM provider adapters on the `LLMProvider` contract (`base.py`) and the `factory.py` that builds/selects them. New model or vision providers go here, not in a parallel module.
+- `src/yolorag/config/` — `settings.py` (`getenv` + `.env` loading) and `model_defaults.py` (the per-provider fast/deep model matrix; single source of truth).
+- `src/yolorag/core/` — orchestrators, routing, deep agent, conversation logging. `src/yolorag/runtime.py` wires a request's provider + model + retriever together.
+- `src/yolorag/knowledge/` + `src/yolorag/retrieval/` — text and image embedding stores/retrievers (pgvector, MongoDB Atlas, Qdrant, Milvus).
+- `src/yolorag/usage/` — token/cost accounting: `cost_calculator.py`, local `pricing.json`, and the `genai-prices` fallback.
+- `src/yolorag/tests/` — the `unittest` suite. `frontend/` — the Vite/React console.
+- `docker/` — all Dockerfiles and `docker-compose.*.yml` (build context is the repo root; `.dockerignore` stays at root). `deploy/` — image init scripts, nginx config, and the standalone Milvus stack.
+
 ## Core Product Contracts
 
 - Keep the app API-first. Do not reintroduce CLI runtime surfaces unless explicitly requested.
@@ -23,6 +34,29 @@ Instructions for Codex and other coding agents working in this repo.
 - Keep richer multi-step tool use, GitHub/MCP investigation, and deep review behavior in the deep-agent path.
 - Preserve true SSE token streaming for fast chat. Do not fake streaming by chunking a completed response after the fact.
 - Retrieval failures must degrade gracefully to LLM-only output instead of breaking chat.
+
+## Providers And Models
+
+- Every LLM integration implements the `LLMProvider` contract in `src/yolorag/providers/base.py`: a `provider_name` attribute, `async complete(LLMRequest) -> LLMResponse`, and an async-generator `stream_complete(LLMRequest) -> AsyncIterator[LLMStreamEvent]`. Do not introduce a parallel provider abstraction.
+- `LLMRequest.messages` is OpenAI-style: each `content` is a string or a list of `{"type": "text" | "image_url", ...}` parts. Vision requests arrive as `image_url` parts carrying `data:` URLs, so a vision call is just a chat call that includes images.
+- Provider selection is env-driven: `YOLORAG_API_PROVIDER` (default `deepseek`) and `YOLORAG_API_MODE` (`fast`/`deep`). `build_runtime`/`build_deep_runtime` in `runtime.py` resolve these and call `get_llm_provider`.
+- Models live only in `config/model_defaults.py` (`BUILT_IN_MODEL_DEFAULTS`) — the single source of truth for both chat resolution and the UI picker. Per-mode runtime overrides use `YOLORAG_<PROVIDER>_FAST_MODEL` / `YOLORAG_<PROVIDER>_THINKING_MODEL` (see `runtime._resolve_model`). Never add a `models.json` or other file-based model list.
+- Cost comes from `usage/cost_calculator.py`: local `usage/pricing.json` first, then the `genai-prices` library. Any model exposed in a picker must be priced (a test asserts non-zero cost). When a provider's pricing id differs from its display name, set a `pricing_provider` attribute and pass it to `cost_calculator.calculate` (e.g. Gemini -> `google`).
+- Raise `ProviderError(message, status=...)` for faults so the API returns a clean status (`400` for bad model / blocked / bad input, `502` for upstream/network) instead of a generic 500.
+- For OpenAI-compatible APIs, subclass `OpenAIProvider` and override `_completion_kwargs`/base URL (see `DeepSeekProvider`) instead of reimplementing streaming and usage extraction.
+- Vision stability: prefer flash-class models for the dataset `describe` path. `gemma-4-31b-it` returns frequent HTTP 500s on image input and mosaic mode does not fix it.
+
+### Adding A New LLM Provider
+
+Use the Gemini adapter (`providers/gemini_provider.py`, added in commit `a9926e8`) as the reference. To add provider `foo`:
+
+1. Add the SDK to `pyproject.toml` `[project].dependencies` and reinstall (`python -m pip install -e .[dev]`).
+2. Create `src/yolorag/providers/foo_provider.py` implementing the contract — or subclass `OpenAIProvider` if the API is OpenAI-compatible. Set `provider_name = "foo"`, translate messages, return an `LLMResponse` with usage/cost/latency, implement `stream_complete`, and map SDK/network errors to `ProviderError`.
+3. Register it in `providers/factory.py`: add `_build_foo(api_base)` (read the key via `_require_env`/`_require_env_any`) and add it to `PROVIDERS`. To expose it in the vision/describe picker, add a `ProviderInfo(..., vision=True, env_keys=[...])` entry to `PROVIDER_INFO`.
+4. Add `"foo": {"fast": "...", "deep": "..."}` to `BUILT_IN_MODEL_DEFAULTS` in `config/model_defaults.py`.
+5. Confirm pricing for those models: if `genai-prices` does not know them, add them to `usage/pricing.json`.
+6. Add the API key / base URL / model-override env vars to `.env.example` (and the compose `environment:` blocks under `docker/` if the deployed stack should support it).
+7. Add `src/yolorag/tests/test_foo_provider.py` mirroring `test_gemini_provider.py` (message translation, usage extraction, error mapping; if vision, that it is listed and every listed model is priced). Run the suite.
 
 ## Retrieval And Agent Rules
 
@@ -108,6 +142,7 @@ curl -N http://127.0.0.1:8000/api/chat/deep/events \
 - For backend behavior changes, run targeted tests first, then the full unittest suite when the change touches shared runtime, routing, tools, providers, retrieval, or API behavior.
 - For frontend changes, run `npm run build` and smoke-test the actual Vite app in a browser.
 - For streaming changes, verify the SSE shape at the API layer and through the frontend when feasible.
+- For provider/model changes, run the provider's `test_<name>_provider.py` and the full suite; confirm any UI-listed model resolves a non-zero cost and that `get_llm_provider` builds it from its env key.
 - For MCP/GitHub changes, verify both an allowed `ultralytics/ultralytics` operation and a blocked outside-repo operation.
 - Before reporting readiness, check `git status --short` and make clear which files are changed or untracked.
 - In dirty worktrees, stage only the requested files and never revert unrelated user changes.
@@ -116,5 +151,6 @@ curl -N http://127.0.0.1:8000/api/chat/deep/events \
 
 - Keep `.env.example`, `README.md`, and frontend docs aligned with runtime behavior when changing env vars, routes, or setup flow.
 - Search for stale references after removing or renaming runtime surfaces.
+- Docker build files live in `docker/` (Dockerfiles + `docker-compose.*.yml`) with the repo root as build context; `.dockerignore` stays at the repo root. If they move, keep compose `dockerfile:`/`context:` paths, `--env-file`, and doc commands in sync.
 - Do not commit secrets, PATs, local `.env` files, `node_modules/`, build outputs, or generated widget bundles.
 - Prefer repo-grounded answers and real verification over generic advice.

@@ -18,9 +18,9 @@ PYTHONPATH=src python -m yolorag.scripts.export_postgres_seed
 Start the stack:
 
 ```bash
-SERVICE_PASSWORD_POSTGRES=yolorag docker compose \
-  -f docker-compose.coolify.yml \
-  -f docker-compose.local.yml \
+SERVICE_PASSWORD_POSTGRES=yolorag docker compose --env-file .env \
+  -f docker/docker-compose.coolify.yml \
+  -f docker/docker-compose.local.yml \
   up -d --build
 ```
 
@@ -30,7 +30,7 @@ Open the frontend at `http://127.0.0.1:8080`. The backend is exposed at
 Check the seeded Postgres data:
 
 ```bash
-docker compose -f docker-compose.coolify.yml -f docker-compose.local.yml exec -T postgres \
+docker compose --env-file .env -f docker/docker-compose.coolify.yml -f docker/docker-compose.local.yml exec -T postgres \
   psql -U yolorag -d yolorag \
   -c "select count(*), min(embedding_dimensions), max(embedding_dimensions) from docs_chunks;"
 ```
@@ -39,7 +39,7 @@ The current seed contains `4824` rows with `3072`-dimension embeddings.
 
 ## Coolify
 
-Use `docker-compose.coolify.yml` as the Docker Compose file. Expose the
+Use `docker/docker-compose.coolify.yml` as the Docker Compose file. Expose the
 `frontend` service on port `8080`; nginx proxies `/api/*` to the internal
 `backend` service.
 
@@ -95,7 +95,7 @@ allowlist is enforced by the app before GitHub tool calls leave the backend.
 service. The frontend selector can still switch requests between `mongodb` and
 `postgresql` at runtime.
 
-The Postgres service builds from `Dockerfile.postgres`, which copies
+The Postgres service builds from `docker/Dockerfile.postgres`, which copies
 `deploy/postgres/init/` into `/docker-entrypoint-initdb.d/` inside the image.
 This avoids relying on a Coolify bind mount for the seed files.
 

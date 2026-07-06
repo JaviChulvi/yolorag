@@ -3,10 +3,10 @@
 # /api/benchmark (with embeddings/ mounted for query sampling + recall).
 #
 #   docker network create yr_net 2>/dev/null || true   # not needed; this stack is self-contained
-#   docker compose -f docker-compose.bench.yml up -d --build
+#   docker compose -f docker/docker-compose.bench.yml up -d --build
 #   # then ingest the pre-computed embeddings into each vendor:
 #   for p in postgresql mongodb qdrant milvus; do \
-#     docker compose -f docker-compose.bench.yml exec -T backend \
+#     docker compose -f docker/docker-compose.bench.yml exec -T backend \
 #       python -m yolorag.scripts.ingest_image_embeddings /data/embeddings --provider $p; done
 #   # then run the frontend (npm run dev) and open the Benchmark page, or:
 #   curl -s -X POST localhost:8000/api/benchmark -H 'content-type: application/json' -d '{}'
@@ -25,8 +25,8 @@ x-vendor-caps: &vendor-caps
 services:
   postgres:
     build:
-      context: .
-      dockerfile: Dockerfile.postgres
+      context: ..
+      dockerfile: docker/Dockerfile.postgres
     environment:
       POSTGRES_DB: yolorag
       POSTGRES_USER: yolorag
@@ -42,8 +42,8 @@ services:
 
   mongodb:
     build:
-      context: .
-      dockerfile: Dockerfile.mongodb
+      context: ..
+      dockerfile: docker/Dockerfile.mongodb
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -55,8 +55,8 @@ services:
 
   qdrant:
     build:
-      context: .
-      dockerfile: Dockerfile.qdrant
+      context: ..
+      dockerfile: docker/Dockerfile.qdrant
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -121,8 +121,8 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ..
+      dockerfile: docker/Dockerfile.backend
     ports:
       - "8000:8000"
     environment:
@@ -136,8 +136,8 @@ services:
       YOLORAG_QDRANT_URL: http://qdrant:6333
       YOLORAG_MILVUS_URI: http://milvus:19530
     volumes:
-      - ./embeddings:/data/embeddings:ro
-      - ./bench_data:/data/bench_data
+      - ../embeddings:/data/embeddings:ro
+      - ../bench_data:/data/bench_data
     depends_on:
       - postgres
       - mongodb
@@ -148,8 +148,8 @@ services:
   # nginx proxies /api -> backend:8000.
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
     ports:
       - "8080:8080"
     depends_on:

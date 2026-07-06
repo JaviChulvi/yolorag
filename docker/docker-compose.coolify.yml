@@ -1,8 +1,13 @@
+# Explicit project name so it stays "yolorag" regardless of this file's folder
+# (Compose otherwise derives it from the directory, i.e. "docker"). Coolify sets
+# its own project name, so this only affects local runs.
+name: yolorag
+
 services:
   postgres:
     build:
-      context: .
-      dockerfile: Dockerfile.postgres
+      context: ..
+      dockerfile: docker/Dockerfile.postgres
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-yolorag}
@@ -18,8 +23,8 @@ services:
 
   backend:
     build:
-      context: .
-      dockerfile: Dockerfile.backend
+      context: ..
+      dockerfile: docker/Dockerfile.backend
     restart: unless-stopped
     environment:
       OPENAI_API_KEY: ${OPENAI_API_KEY:?Set OPENAI_API_KEY in Coolify}
@@ -64,8 +69,8 @@ services:
 
   frontend:
     build:
-      context: .
-      dockerfile: Dockerfile.frontend
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
     restart: unless-stopped
     depends_on:
       backend:
