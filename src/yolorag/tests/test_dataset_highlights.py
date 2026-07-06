@@ -55,6 +55,39 @@ class SelectDiverseImagesTests(unittest.TestCase):
         selected, _ = _select_diverse_images([_image("only", [0])], 4)
         self.assertEqual(len(selected), 1)
 
+    def test_never_picks_blank_images_while_labeled_ones_remain(self) -> None:
+        # Regression: once all classes are covered by the first pick, the rest
+        # must still be labeled images, not unlabeled ones.
+        images = [_image("both", [0, 1])]
+        images += [_image(f"cat{i}", [0]) for i in range(5)]
+        images += [_image(f"dog{i}", [1]) for i in range(5)]
+        images += [_image(f"blank{i}", []) for i in range(5)]
+        selected, covered = _select_diverse_images(images, 4)
+        self.assertEqual(len(selected), 4)
+        self.assertEqual(covered, {0, 1})
+        self.assertTrue(
+            all(img["labels"] for img in selected),
+            [img["name"] for img in selected],
+        )
+
+    def test_prefers_images_with_more_labels_once_classes_covered(self) -> None:
+        images = [
+            _image("both", [0, 1]),
+            _image("cat_rich", [0, 0, 0]),
+            _image("cat_poor", [0]),
+            _image("dog_rich", [1, 1, 1]),
+            _image("dog_poor", [1]),
+        ]
+        selected, _ = _select_diverse_images(images, 3)
+        names = [img["name"] for img in selected]
+        self.assertEqual(names, ["both", "cat_rich", "dog_rich"])
+
+    def test_falls_back_to_blanks_only_when_nothing_labeled_remains(self) -> None:
+        images = [_image("both", [0, 1]), _image("blank1", []), _image("blank2", [])]
+        selected, _ = _select_diverse_images(images, 3)
+        self.assertEqual(len(selected), 3)
+        self.assertEqual(selected[0]["name"], "both")
+
 
 class ParseDatasetRefTests(unittest.TestCase):
     def test_accepts_full_url(self) -> None:
