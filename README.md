@@ -526,3 +526,4 @@ app-overhead timings, then writes a JSON report under `evals/runs/`.
 The frontend eval panel imports `frontend/src/evals/profile_questions.json` and calls
 `/api/chat/fast` directly in batches of five. Eval requests opt into final SSE
 metrics and set `analytics=false` so benchmark traffic stays transient.
+Dispatcher smoke test — please ignore.
